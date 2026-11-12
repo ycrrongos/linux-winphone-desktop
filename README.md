@@ -1,7 +1,7 @@
-# Win10X Linux Desktop
+# Linux WinPhone Desktop
 
 由 **ycrrongos 使用 Codex 开发**。键盘输入法独立仓库：
-[winphone-pinyin-keyboard](https://github.com/ycrrongos/winphone-pinyin-keyboard)。
+[winphone-pinyin-keyboard](https://github.com/ycrrongos/linux-pinyin-keybord-wp)。
 本仓库保留可构建的固定版本键盘集成，来源见 `third_party/winphone-pinyin/UPSTREAM.json`。
 
 

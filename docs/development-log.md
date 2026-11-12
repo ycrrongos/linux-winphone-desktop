@@ -2096,3 +2096,17 @@ Append-only record of completed features and repository changes. Required by
   Credential/build-path scan passes; git root commits use only user identity.
 - **Status/follow-up:** Prepared/verified; remote repository creation/push and
   remote author/contributor verification follow before completion claim.
+
+### 2026-11-13 — user selected public visibility and final repository names
+
+- **Request:** Make both repositories public; desktop `linux-winphone-desktop`,
+  keyboard `linux-pinyin-keybord-wp` (exact user spelling).
+- **Change:** Update current repository/README links and keyboard provenance pin;
+  preserve all commits/authors, source behavior and upstream attribution.
+- **Files/components:** README, keyboard package repository metadata, desktop
+  UPSTREAM manifest and publication documents. Local publication directories
+  now use the two final names under target/github-publication-20261113/.
+- **Verification:** Focused diff check and pinned keyboard parity; GitHub rename,
+  visibility, remote push and contributor verification follow before reporting.
+- **Status/follow-up:** Current explicit public choice supersedes the earlier
+  unanswered-question/private default. Original legacy origin remains unchanged.

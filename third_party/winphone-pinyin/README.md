@@ -1,7 +1,7 @@
 # Integrated keyboard source
 
 The offline pinyin engine, dictionary and WP keyboard adapter are maintained in
-https://github.com/ycrrongos/winphone-pinyin-keyboard . UPSTREAM.json pins the
+https://github.com/ycrrongos/linux-pinyin-keybord-wp . UPSTREAM.json pins the
 exact commit and every imported file hash. Integrated copies keep a normal
 clone buildable; no submodule checkout or build-time network fetch is needed.
 

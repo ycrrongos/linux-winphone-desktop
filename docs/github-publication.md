@@ -28,3 +28,15 @@ Visibility defaults to private because the optional public/private question
 received no answer before publication. Both descriptions and READMEs explicitly
 state that the projects were developed with Codex. Public visibility can be
 selected later without changing source or authorship.
+
+## Final names and public visibility — 2026-11-13 user correction
+
+The user's delayed answer explicitly selects PUBLIC for both repositories and
+these exact names, superseding the private-default decision above:
+
+- https://github.com/ycrrongos/linux-winphone-desktop
+- https://github.com/ycrrongos/linux-pinyin-keybord-wp
+
+Local publication checkouts now use these final names below
+`target/github-publication-20261113/`. Git histories/author identity and upstream
+notices remain intact; repository links and keyboard pin are updated.

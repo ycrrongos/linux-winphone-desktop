@@ -1,6 +1,6 @@
 {
-  "repository": "https://github.com/ycrrongos/winphone-pinyin-keyboard.git",
-  "revision": "4257dc161fa1c311f9391ec08937f4a5c4c70add",
+  "repository": "https://github.com/ycrrongos/linux-pinyin-keybord-wp.git",
+  "revision": "6114670dc44c2c4832cbe836b6ebb22f4d408aac",
   "license": "GPL-3.0-only; dictionary Apache-2.0",
   "files": [
     {
