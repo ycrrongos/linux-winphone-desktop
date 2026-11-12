@@ -1,0 +1,31 @@
+[package]
+name = "win10x-comp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Win10X Wayland compositor (smithay, nested winit backend)"
+
+[[bin]]
+name = "win10x-comp"
+path = "src/main.rs"
+
+[dependencies]
+win10x-protocol = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+bitflags = "2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+serde_json = "1"
+
+[dependencies.smithay]
+git = "https://github.com/Smithay/smithay.git"
+rev = "4cf0b62028039661477d482ec4758b687d8f4392"
+default-features = false
+features = [
+    "backend_winit",
+    "wayland_frontend",
+    "desktop",
+    # Mesa EGL clients (eframe/glow shell): wl_drm + dmabuf feedback / render nodes.
+    "use_system_lib",
+    "backend_drm",
+]

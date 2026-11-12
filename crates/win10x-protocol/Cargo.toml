@@ -1,0 +1,9 @@
+[package]
+name = "win10x-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared shell/compositor state for Win10X Linux desktop"
+
+[dependencies]
+serde = { workspace = true }

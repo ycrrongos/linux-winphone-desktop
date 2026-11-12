@@ -1,0 +1,1636 @@
+//! Win10X shell UI.
+//!
+//! - **Runtime widgets:** `fluent-egui` (Fluent 2 / WinUI 3) — kept as the editable base
+//! - **Look:** `fluent1` skin ported from `/home/rong/Win10UI` (Fluent 1 / Win10 tokens)
+//!
+//! L1: `cargo run -p win10x-shell`
+
+mod apps;
+mod desktop;
+mod fluent1;
+
+use eframe::egui::{
+    self, Align, Color32, CornerRadius, Layout, RichText, Sense, Stroke, StrokeKind, TextureHandle,
+    TextureOptions, UiBuilder,
+};
+use fluent_egui::winui::prelude::*;
+use fluent_egui::winui::{self, FluentTheme, ThemeConfig};
+use win10x_protocol::{
+    format_shell_title, scale_to_percent, Panel, ShellSnapshot, OUTPUT_SCALE_PRESETS, SHELL_APP_ID,
+    SHELL_TITLE_PREFIX,
+};
+
+use desktop::{
+    accent_from_bitmap, app_icon, contrast_ratio, palette_from_bitmap, resolve_bitmap,
+    wallpaper_by_id, WallpaperBitmap, CONTRAST_THEMES, WALLPAPERS, WIN10UI_WALLPAPER_PATH,
+    WIN10_WINDOWS_COLORS,
+};
+use std::path::{Path, PathBuf};
+use fluent1::{AcrylicBackdrop, AcrylicCache, Fluent1Theme, Palette, RevealState};
+
+fn main() -> eframe::Result {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let nested = std::env::var_os("WIN10X_NESTED").is_some();
+    let theme = ThemeConfig::new(FluentTheme::Light);
+
+    if nested {
+        tracing::info!("nested mode: transparent chrome over win10x-comp HostBackdrop");
+        let mut options = winui::native_options(SHELL_TITLE_PREFIX);
+        options.viewport = egui::ViewportBuilder::default()
+            .with_title(SHELL_TITLE_PREFIX)
+            .with_app_id(SHELL_APP_ID)
+            .with_fullscreen(true)
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_resizable(false);
+        options.centered = false;
+        // Nested smithay often has no MSAA configs for glutin.
+        options.multisampling = 0;
+        options.depth_buffer = 0;
+        options.stencil_buffer = 0;
+        winui::run_native_with_options(SHELL_TITLE_PREFIX, theme, options, |_| {
+            ShellApp::new_nested()
+        })
+    } else {
+        winui::run_native(SHELL_TITLE_PREFIX, theme, |_| ShellApp::new())
+    }
+}
+
+struct ShellApp {
+    snap: ShellSnapshot,
+    theme: Fluent1Theme,
+    accent: Color32,
+    wallpaper_id: String,
+    /// Absolute path when user picked a file (or Win10UI sample).
+    wallpaper_path: Option<String>,
+    recent_wallpapers: Vec<String>,
+    wallpaper_bmp: WallpaperBitmap,
+    wallpaper_tex: Option<TextureHandle>,
+    /// Win10: Automatically pick an accent color from my background
+    accent_from_background: bool,
+    /// Win10: Show accent color on Start, taskbar, and action center
+    accent_on_surfaces: bool,
+    /// Win10: Transparency effects
+    transparency_effects: bool,
+    recent_accents: Vec<Color32>,
+    wallpaper_palette: Vec<Color32>,
+    settings_tab: SettingsTab,
+    custom_hue: f32,
+    custom_sat: f32,
+    custom_val: f32,
+    contrast_idx: usize,
+    acrylic_cache: AcrylicCache,
+    pal: Palette,
+    reveal: RevealState,
+    search: String,
+    show_all_apps: bool,
+    quick_wifi: bool,
+    quick_bt: bool,
+    quick_a11y: bool,
+    expand_wifi: bool,
+    expand_bt: bool,
+    expand_a11y: bool,
+    media_playing: bool,
+    last_error: Option<String>,
+    swipe_y0: Option<f32>,
+    icon_shift_t: f32,
+    /// Running under `win10x-comp` — compositor owns HostBackdrop blur.
+    nested: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    Personalize,
+    Colors,
+    Contrast,
+}
+
+impl ShellApp {
+    fn new() -> Self {
+        Self::build(false)
+    }
+
+    fn new_nested() -> Self {
+        Self::build(true)
+    }
+
+    fn build(nested: bool) -> Self {
+        let theme = Fluent1Theme::Light;
+        // Match the light 10X reference: soft solid sky, not a photo wallpaper.
+        let wallpaper_id = "10x-sky".to_string();
+        let wallpaper_path = None;
+        let wallpaper_bmp = resolve_bitmap(wallpaper_by_id(&wallpaper_id));
+        let accent = Color32::from_rgb(0x00, 0x78, 0xd4);
+        let wallpaper_palette = palette_from_bitmap(&wallpaper_bmp, 6);
+        let mut snap = ShellSnapshot::default();
+        snap.apps = apps::discover_apps();
+        Self {
+            snap,
+            theme,
+            accent,
+            wallpaper_id,
+            wallpaper_path,
+            recent_wallpapers: Vec::new(),
+            wallpaper_bmp,
+            wallpaper_tex: None,
+            accent_from_background: false,
+            accent_on_surfaces: false,
+            transparency_effects: true,
+            recent_accents: vec![accent],
+            wallpaper_palette,
+            settings_tab: SettingsTab::Personalize,
+            custom_hue: 210.0,
+            custom_sat: 0.85,
+            custom_val: 0.83,
+            contrast_idx: 0,
+            acrylic_cache: AcrylicCache::default(),
+            pal: Palette::for_theme_accent(theme, accent),
+            reveal: RevealState::default(),
+            search: String::new(),
+            show_all_apps: false,
+            quick_wifi: true,
+            quick_bt: false,
+            quick_a11y: false,
+            expand_wifi: false,
+            expand_bt: false,
+            expand_a11y: false,
+            media_playing: false,
+            last_error: None,
+            swipe_y0: None,
+            icon_shift_t: 1.0,
+            nested,
+        }
+    }
+
+    fn sync_compositor_title(&self, ctx: &egui::Context) {
+        if !self.nested {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format_shell_title(
+            self.snap.panel,
+            self.snap.output_scale,
+        )));
+    }
+
+    fn refresh_palette(&mut self) {
+        self.pal = Palette::for_theme_accent(self.theme, self.accent);
+    }
+
+    fn set_wallpaper(&mut self, id: &str) {
+        self.wallpaper_id = id.to_string();
+        let wp = wallpaper_by_id(id);
+        if let Some(path) = wp.path {
+            self.apply_wallpaper_file(PathBuf::from(path));
+            return;
+        }
+        self.wallpaper_path = None;
+        self.wallpaper_bmp = resolve_bitmap(wp);
+        self.wallpaper_tex = None;
+        self.wallpaper_palette = palette_from_bitmap(&self.wallpaper_bmp, 6);
+        self.acrylic_cache = AcrylicCache::default();
+        if self.accent_from_background {
+            self.set_accent(accent_from_bitmap(&self.wallpaper_bmp));
+        }
+    }
+
+    fn apply_wallpaper_file(&mut self, path: PathBuf) {
+        match WallpaperBitmap::load_image(&path, 1920) {
+            Ok(bmp) => {
+                let path_s = path.display().to_string();
+                self.wallpaper_id = "custom".into();
+                self.wallpaper_path = Some(path_s.clone());
+                self.wallpaper_bmp = bmp;
+                self.wallpaper_tex = None;
+                self.wallpaper_palette = palette_from_bitmap(&self.wallpaper_bmp, 6);
+                self.acrylic_cache = AcrylicCache::default();
+                self.recent_wallpapers.retain(|p| p != &path_s);
+                self.recent_wallpapers.insert(0, path_s);
+                self.recent_wallpapers.truncate(8);
+                if self.accent_from_background {
+                    self.set_accent(accent_from_bitmap(&self.wallpaper_bmp));
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "wallpaper load failed");
+                self.last_error = Some(format!("Couldn’t open wallpaper: {e}"));
+            }
+        }
+    }
+
+    fn browse_wallpaper(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Choose a desktop background")
+            .add_filter("Pictures", &["jpg", "jpeg", "png", "bmp", "webp"])
+            .pick_file()
+        {
+            self.apply_wallpaper_file(path);
+        }
+    }
+
+    fn wallpaper_label(&self) -> String {
+        if let Some(path) = &self.wallpaper_path {
+            Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path)
+                .to_string()
+        } else {
+            wallpaper_by_id(&self.wallpaper_id).name.to_string()
+        }
+    }
+
+    fn set_accent(&mut self, accent: Color32) {
+        self.accent = accent;
+        if !self.recent_accents.iter().any(|c| *c == accent) {
+            self.recent_accents.insert(0, accent);
+            self.recent_accents.truncate(8);
+        }
+        self.refresh_palette();
+        self.acrylic_cache = AcrylicCache::default();
+    }
+
+    fn set_output_scale(&mut self, scale: f64) {
+        use win10x_protocol::clamp_output_scale;
+        self.snap.output_scale = clamp_output_scale(scale);
+    }
+
+    fn acrylic<'a>(&'a mut self, desktop: egui::Rect) -> AcrylicBackdrop<'a> {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        self.wallpaper_path.hash(&mut hasher);
+        AcrylicBackdrop {
+            desktop,
+            wallpaper: wallpaper_by_id(if self.wallpaper_path.is_some() {
+                "win10ui"
+            } else {
+                &self.wallpaper_id
+            }),
+            bitmap: &self.wallpaper_bmp,
+            theme: self.theme,
+            transparency: self.transparency_effects,
+            accent_on_surfaces: self.accent_on_surfaces,
+            accent: self.accent,
+            cache: &mut self.acrylic_cache,
+            cache_salt: hasher.finish(),
+        }
+    }
+
+    fn set_panel(&mut self, panel: Panel) {
+        if self.snap.panel == panel {
+            self.snap.panel = Panel::None;
+        } else {
+            self.snap.panel = panel;
+        }
+        if self.snap.panel != Panel::Launcher {
+            self.show_all_apps = false;
+        }
+    }
+
+    fn launch(&mut self, id: &str) {
+        if let Some(idx) = self.snap.apps.iter().position(|a| a.id == id) {
+            let app = self.snap.apps[idx].clone();
+            match apps::launch(&app) {
+                Ok(()) => {
+                    if let Some(a) = self.snap.apps.get_mut(idx) {
+                        a.running = true;
+                    }
+                    self.snap.recent.insert(0, app.name.clone());
+                    self.snap.recent.truncate(10);
+                    self.last_error = None;
+                    self.icon_shift_t = 0.0;
+                    self.snap.panel = Panel::None;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, name = %app.name, "launch failed");
+                    self.last_error = Some(format!("Couldn’t start {}: {e}", app.name));
+                }
+            }
+        }
+    }
+
+    fn tb_height(&self) -> f32 {
+        self.snap.taskbar_size.height()
+    }
+
+    fn icon_px(&self) -> f32 {
+        self.snap.taskbar_size.icon()
+    }
+
+    fn paint_wallpaper(&mut self, ui: &mut egui::Ui, desktop: egui::Rect) {
+        if self.wallpaper_tex.is_none() {
+            let img = self.wallpaper_bmp.color_image();
+            self.wallpaper_tex = Some(ui.ctx().load_texture(
+                format!("wallpaper-{}", self.wallpaper_id),
+                img,
+                TextureOptions::LINEAR,
+            ));
+        }
+        if let Some(tex) = &self.wallpaper_tex {
+            let tw = self.wallpaper_bmp.width as f32;
+            let th = self.wallpaper_bmp.height as f32;
+            let scale = (desktop.width() / tw.max(1.0)).max(desktop.height() / th.max(1.0));
+            let draw_w = tw * scale;
+            let draw_h = th * scale;
+            let x = desktop.center().x - draw_w * 0.5;
+            let y = desktop.center().y - draw_h * 0.5;
+            let dest = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(draw_w, draw_h));
+            ui.painter().image(
+                tex.id(),
+                dest,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            return;
+        }
+        let wp = wallpaper_by_id(&self.wallpaper_id);
+        ui.painter().rect_filled(desktop, 0.0, wp.top);
+    }
+}
+
+impl eframe::App for ShellApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.refresh_palette();
+        fluent1::apply_to_ctx_ex(ui.ctx(), self.theme, &self.pal, self.nested);
+        self.reveal.track(ui);
+        self.sync_compositor_title(ui.ctx());
+
+        // Standalone: crisp egui scale. Nested: compositor drives wl fractional-scale.
+        if !self.nested {
+            let want = self.snap.output_scale as f32;
+            if (ui.ctx().pixels_per_point() - want).abs() > 0.01 {
+                ui.ctx().set_pixels_per_point(want);
+            }
+        }
+
+        let dt = ui.ctx().input(|i| i.stable_dt).min(0.05);
+        self.icon_shift_t = fluent1::spring_step(self.icon_shift_t, 1.0, dt, 12.0);
+
+        let full = ui.max_rect();
+        let tb_h = self.tb_height();
+        let desktop =
+            egui::Rect::from_min_max(full.min, egui::pos2(full.max.x, full.max.y - tb_h));
+        let taskbar =
+            egui::Rect::from_min_max(egui::pos2(full.min.x, full.max.y - tb_h), full.max);
+
+        // Nested: desktop area stays clear so compositor wallpaper/windows show through.
+        // Standalone: paint wallpaper into the shell window.
+        if !self.nested {
+            self.paint_wallpaper(ui, desktop);
+        }
+
+        if self.snap.panel == Panel::None {
+            ui.scope_builder(UiBuilder::new().max_rect(desktop), |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(desktop.height() * 0.32);
+                    ui.label(
+                        RichText::new("Win10X")
+                            .size(40.0)
+                            .strong()
+                            .color(Color32::WHITE),
+                    );
+                    ui.label(
+                        RichText::new("Tap Start · swipe up from the taskbar")
+                            .size(14.0)
+                            .color(Color32::from_rgba_unmultiplied(255, 255, 255, 180)),
+                    );
+                });
+            });
+        }
+
+        match self.snap.panel {
+            Panel::Launcher => self.draw_launcher(ui, desktop),
+            Panel::ActionCenter => self.draw_action_center(ui, desktop),
+            Panel::TaskView => self.draw_task_view(ui, desktop),
+            Panel::DesktopSettings => self.draw_desktop_settings(ui, desktop),
+            Panel::None => {}
+        }
+
+        self.draw_taskbar(ui, taskbar, desktop);
+
+        if let Some(err) = &self.last_error {
+            let banner = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), 36.0));
+            ui.painter()
+                .rect_filled(banner, 0.0, self.pal.critical);
+            ui.scope_builder(UiBuilder::new().max_rect(banner), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add_space(12.0);
+                    ui.label(RichText::new(err.clone()).color(Color32::WHITE).size(13.0));
+                });
+            });
+        }
+
+        ui.ctx().request_repaint();
+    }
+}
+
+impl ShellApp {
+    fn draw_taskbar(&mut self, ui: &mut egui::Ui, rect: egui::Rect, desktop: egui::Rect) {
+        let pal = self.pal;
+        let backdrop = self.acrylic(desktop);
+        fluent1::paint_taskbar(ui, rect, &pal, backdrop);
+        self.reveal.paint_on(ui, rect, &self.pal);
+
+        let response = ui.interact(rect, ui.id().with("taskbar"), Sense::click_and_drag());
+        if response.drag_started() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                self.swipe_y0 = Some(pos.y);
+            }
+        }
+        if response.dragged() {
+            if let (Some(y0), Some(pos)) = (self.swipe_y0, response.interact_pointer_pos()) {
+                if y0 - pos.y > 36.0 {
+                    self.snap.panel = Panel::Launcher;
+                    self.swipe_y0 = None;
+                }
+            }
+        }
+        if response.drag_stopped() {
+            self.swipe_y0 = None;
+        }
+
+        let mut toggle: Option<Panel> = None;
+        let clock = {
+            use chrono::Timelike;
+            let now = chrono::Local::now();
+            format!("{}:{:02}", now.hour(), now.minute())
+        };
+
+        // 10X-style: Start + Task View centered; clock / status tray on the right.
+        ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+            ui.winui(|ui| {
+                ui.row(|ui| {
+                    let cluster = 88.0_f32;
+                    let left = ((ui.available_width() - cluster) * 0.5).max(8.0);
+                    ui.add_space(left);
+
+                    if ui
+                        .icon_button(FluentIcon::Home)
+                        .on_hover_text("Start")
+                        .clicked()
+                    {
+                        toggle = Some(Panel::Launcher);
+                    }
+                    if ui
+                        .icon_button(FluentIcon::Grid)
+                        .on_hover_text("Task View")
+                        .clicked()
+                    {
+                        toggle = Some(Panel::TaskView);
+                    }
+
+                    let tray_w = 132.0;
+                    let gap = (ui.available_width() - tray_w).max(8.0);
+                    ui.add_space(gap);
+
+                    ui.label(RichText::new(&clock).size(13.0).color(pal.text));
+                    ui.add_space(6.0);
+                    if ui
+                        .icon_button(FluentIcon::Globe)
+                        .on_hover_text("Network")
+                        .clicked()
+                    {
+                        toggle = Some(Panel::ActionCenter);
+                    }
+                    if ui
+                        .icon_button(FluentIcon::Power)
+                        .on_hover_text("Battery / power")
+                        .clicked()
+                    {
+                        toggle = Some(Panel::ActionCenter);
+                    }
+                    if ui
+                        .icon_button(FluentIcon::Notification)
+                        .on_hover_text("Action Center")
+                        .clicked()
+                    {
+                        toggle = Some(Panel::ActionCenter);
+                    }
+                });
+            });
+        });
+
+        // Quiet access to desktop settings: double-click empty taskbar band.
+        if response.double_clicked() {
+            toggle = Some(Panel::DesktopSettings);
+        }
+
+        if let Some(p) = toggle {
+            self.set_panel(p);
+        }
+    }
+
+    fn draw_desktop_settings(&mut self, ui: &mut egui::Ui, desktop: egui::Rect) {
+        // Soft dim only — nested HostBackdrop card blur is under the shell.
+        ui.painter().rect_filled(
+            desktop,
+            0.0,
+            if self.nested {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 60)
+            } else {
+                self.pal.overlay
+            },
+        );
+        let card = inset_card(desktop, 20.0, 20.0, 12.0, 20.0);
+        let pal = self.pal;
+        let backdrop = self.acrylic(desktop);
+        fluent1::paint_acrylic(ui, card, &pal, backdrop);
+        self.reveal.paint_on(ui, card, &self.pal);
+
+        let mut close = false;
+        let mut set_theme: Option<Fluent1Theme> = None;
+        let mut set_accent: Option<Color32> = None;
+        let mut set_wallpaper: Option<&'static str> = None;
+        let mut browse_wallpaper = false;
+        let mut recent_pick: Option<String> = None;
+        let mut tab = self.settings_tab;
+        let mut accent_from_bg = self.accent_from_background;
+        let mut accent_on = self.accent_on_surfaces;
+        let mut transparency = self.transparency_effects;
+        let mut contrast_idx = self.contrast_idx;
+        let mut custom_hue = self.custom_hue;
+        let mut custom_sat = self.custom_sat;
+        let mut custom_val = self.custom_val;
+        let mut apply_custom = false;
+        let mut set_scale: Option<f64> = None;
+        let output_scale = self.snap.output_scale;
+        let current_wp = self.wallpaper_id.clone();
+        let current_accent = self.accent;
+        let recent = self.recent_accents.clone();
+        let wall_pal = self.wallpaper_palette.clone();
+        let wallpaper_label = self.wallpaper_label();
+        let recent_walls = self.recent_wallpapers.clone();
+        let has_file_wallpaper = self.wallpaper_path.is_some();
+        let is_dark = matches!(self.theme, Fluent1Theme::Dark);
+
+        ui.scope_builder(UiBuilder::new().max_rect(card), |ui| {
+            ui.winui(|ui| {
+                ui.column(|ui| {
+                    ui.add_space(10.0);
+                    ui.row(|ui| {
+                        ui.label(RichText::new("Personalization").strong().size(22.0));
+                        let spacer = (ui.available_width() - 40.0).max(0.0);
+                        ui.add_space(spacer);
+                        if ui
+                            .icon_button(FluentIcon::Close)
+                            .on_hover_text("Close")
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.row(|ui| {
+                        if ui
+                            .button(if tab == SettingsTab::Personalize {
+                                "● Background"
+                            } else {
+                                "Background"
+                            })
+                            .clicked()
+                        {
+                            tab = SettingsTab::Personalize;
+                        }
+                        if ui
+                            .button(if tab == SettingsTab::Colors {
+                                "● Colors"
+                            } else {
+                                "Colors"
+                            })
+                            .clicked()
+                        {
+                            tab = SettingsTab::Colors;
+                        }
+                        if ui
+                            .button(if tab == SettingsTab::Contrast {
+                                "● Contrast"
+                            } else {
+                                "Contrast"
+                            })
+                            .clicked()
+                        {
+                            tab = SettingsTab::Contrast;
+                        }
+                    });
+                    ui.add_space(12.0);
+
+                    match tab {
+                        SettingsTab::Personalize => {
+                            ui.label(RichText::new("Background").strong().size(15.0));
+                            ui.label(
+                                RichText::new(format!("Current picture: {wallpaper_label}"))
+                                    .size(13.0),
+                            );
+                            ui.add_space(8.0);
+                            ui.row(|ui| {
+                                if ui.button("Browse pictures…").clicked() {
+                                    browse_wallpaper = true;
+                                }
+                                if ui.button("Win10UI sample").clicked() {
+                                    recent_pick = Some(WIN10UI_WALLPAPER_PATH.to_string());
+                                }
+                            });
+                            if !recent_walls.is_empty() {
+                                ui.add_space(10.0);
+                                ui.label(RichText::new("Recent").strong().size(13.0));
+                                ui.add_space(4.0);
+                                for path in recent_walls.iter().take(5) {
+                                    let name = Path::new(path)
+                                        .file_name()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or(path);
+                                    if ui.button(name).on_hover_text(path).clicked() {
+                                        recent_pick = Some(path.clone());
+                                    }
+                                }
+                            }
+                            ui.add_space(12.0);
+                            ui.label(RichText::new("Suggested colors").weak().size(12.0));
+                            ui.add_space(6.0);
+                            ui.wrap(|ui| {
+                                for wp in WALLPAPERS.iter().filter(|w| w.path.is_none()) {
+                                    let selected = current_wp == wp.id && !has_file_wallpaper;
+                                    let (rect, resp) = ui
+                                        .allocate_exact_size(egui::vec2(88.0, 56.0), Sense::click());
+                                    paint_wallpaper_swatch(
+                                        ui,
+                                        rect,
+                                        wp.top,
+                                        wp.bottom,
+                                        selected,
+                                        current_accent,
+                                    );
+                                    if resp.clicked() {
+                                        set_wallpaper = Some(wp.id);
+                                    }
+                                    resp.on_hover_text(wp.name);
+                                    ui.add_space(6.0);
+                                }
+                            });
+                            ui.add_space(16.0);
+                            ui.label(RichText::new("Choose your mode").strong().size(15.0));
+                            ui.add_space(8.0);
+                            ui.row(|ui| {
+                                let light =
+                                    mode_chip(ui, "Light", FluentIcon::Sun, !is_dark, current_accent);
+                                ui.add_space(8.0);
+                                let dark =
+                                    mode_chip(ui, "Dark", FluentIcon::Moon, is_dark, current_accent);
+                                if light.clicked() {
+                                    set_theme = Some(Fluent1Theme::Light);
+                                }
+                                if dark.clicked() {
+                                    set_theme = Some(Fluent1Theme::Dark);
+                                }
+                            });
+                            ui.add_space(14.0);
+                            ui.toggle(&mut transparency, "Transparency effects");
+                            ui.label(
+                                RichText::new(
+                                    "Start acrylic: HostBackdrop · blur≈30 · tint≈0.55 (MS / Windhawk)",
+                                )
+                                .weak()
+                                .size(11.0),
+                            );
+                            ui.add_space(16.0);
+                            ui.label(RichText::new("Display scale").strong().size(15.0));
+                            ui.label(
+                                RichText::new(
+                                    "Uses Wayland fractional scale (niri-style) so apps redraw crisply — not a stretched screenshot.",
+                                )
+                                .weak()
+                                .size(11.0),
+                            );
+                            ui.add_space(8.0);
+                            let scale_pct = scale_to_percent(output_scale) as f32;
+                            ui.label(
+                                RichText::new(format!("Current: {scale_pct:.0}%"))
+                                    .size(13.0)
+                                    .color(pal.text),
+                            );
+                            ui.add_space(6.0);
+                            ui.row(|ui| {
+                                for &pct in OUTPUT_SCALE_PRESETS {
+                                    let selected = scale_to_percent(output_scale) == pct;
+                                    let label = format!("{pct}%");
+                                    if selected {
+                                        if ui.button(&label).clicked() {
+                                            set_scale = Some(pct as f64 / 100.0);
+                                        }
+                                    } else if ui.button(label).clicked() {
+                                        set_scale = Some(pct as f64 / 100.0);
+                                    }
+                                }
+                            });
+                            ui.add_space(8.0);
+                            ui.row(|ui| {
+                                if ui.button("−").on_hover_text("Decrease 25%").clicked() {
+                                    set_scale = Some(output_scale - 0.25);
+                                }
+                                if ui.button("+").on_hover_text("Increase 25%").clicked() {
+                                    set_scale = Some(output_scale + 0.25);
+                                }
+                                if ui.button("Reset 100%").clicked() {
+                                    set_scale = Some(1.0);
+                                }
+                            });
+                        }
+                        SettingsTab::Colors => {
+                            ui.toggle(
+                                &mut accent_from_bg,
+                                "Automatically pick an accent color from my background",
+                            );
+                            ui.add_space(6.0);
+                            if !wall_pal.is_empty() {
+                                ui.label(
+                                    RichText::new("Colors from background (Color Thief)")
+                                        .strong()
+                                        .size(13.0),
+                                );
+                                ui.add_space(6.0);
+                                ui.wrap(|ui| {
+                                    for c in &wall_pal {
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(32.0, 32.0),
+                                            Sense::click(),
+                                        );
+                                        paint_swatch(ui, rect, *c, current_accent == *c);
+                                        if resp.clicked() {
+                                            set_accent = Some(*c);
+                                            accent_from_bg = false;
+                                        }
+                                        ui.add_space(4.0);
+                                    }
+                                });
+                            }
+                            ui.add_space(12.0);
+                            ui.label(RichText::new("Windows colors").strong().size(15.0));
+                            ui.add_space(6.0);
+                            ui.wrap(|ui| {
+                                for c in WIN10_WINDOWS_COLORS {
+                                    let (rect, resp) =
+                                        ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+                                    paint_swatch(ui, rect, *c, current_accent == *c);
+                                    if resp.clicked() {
+                                        set_accent = Some(*c);
+                                        accent_from_bg = false;
+                                    }
+                                    ui.add_space(4.0);
+                                }
+                            });
+                            if !recent.is_empty() {
+                                ui.add_space(12.0);
+                                ui.label(RichText::new("Recent colors").strong().size(13.0));
+                                ui.add_space(6.0);
+                                ui.wrap(|ui| {
+                                    for c in &recent {
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(28.0, 28.0),
+                                            Sense::click(),
+                                        );
+                                        paint_swatch(ui, rect, *c, current_accent == *c);
+                                        if resp.clicked() {
+                                            set_accent = Some(*c);
+                                            accent_from_bg = false;
+                                        }
+                                        ui.add_space(4.0);
+                                    }
+                                });
+                            }
+                            ui.add_space(14.0);
+                            ui.label(RichText::new("Custom color").strong().size(15.0));
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("Hue").size(12.0));
+                            ui.add(
+                                egui::Slider::new(&mut custom_hue, 0.0..=360.0).show_value(true),
+                            );
+                            ui.label(RichText::new("Saturation").size(12.0));
+                            ui.add(egui::Slider::new(&mut custom_sat, 0.0..=1.0));
+                            ui.label(RichText::new("Value").size(12.0));
+                            ui.add(egui::Slider::new(&mut custom_val, 0.0..=1.0));
+                            let preview = hsv_to_rgb(custom_hue, custom_sat, custom_val);
+                            ui.row(|ui| {
+                                let (rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(48.0, 28.0), Sense::hover());
+                                ui.painter().rect_filled(rect, 0.0, preview);
+                                if ui.button("Done").clicked() {
+                                    apply_custom = true;
+                                    accent_from_bg = false;
+                                }
+                            });
+                            ui.add_space(10.0);
+                            ui.toggle(
+                                &mut accent_on,
+                                "Show accent color on Start, taskbar, and action center",
+                            );
+                        }
+                        SettingsTab::Contrast => {
+                            ui.label(
+                                RichText::new("High contrast themes")
+                                    .strong()
+                                    .size(15.0),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    "Preview like Win10 Ease of Access → High contrast",
+                                )
+                                .weak()
+                                .size(12.0),
+                            );
+                            ui.add_space(10.0);
+                            for (i, theme) in CONTRAST_THEMES.iter().enumerate() {
+                                let selected = contrast_idx == i;
+                                if ui
+                                    .button(if selected {
+                                        format!("● {}", theme.name)
+                                    } else {
+                                        theme.name.to_string()
+                                    })
+                                    .clicked()
+                                {
+                                    contrast_idx = i;
+                                }
+                            }
+                            ui.add_space(12.0);
+                            let theme = CONTRAST_THEMES[contrast_idx.min(CONTRAST_THEMES.len() - 1)];
+                            paint_contrast_preview(ui, theme, current_accent);
+                            ui.add_space(10.0);
+                            ui.label(RichText::new("Accent contrast checks").strong().size(13.0));
+                            let pairs = [
+                                ("Text on accent", Color32::WHITE, current_accent),
+                                ("Accent on acrylic dark", current_accent, Color32::from_rgb(32, 32, 32)),
+                                ("Accent on acrylic light", current_accent, Color32::from_rgb(243, 243, 243)),
+                            ];
+                            for (label, fg, bg) in pairs {
+                                let ratio = contrast_ratio(fg, bg);
+                                let pass = if ratio >= 4.5 {
+                                    "AA ✓"
+                                } else if ratio >= 3.0 {
+                                    "Large AA"
+                                } else {
+                                    "Fail"
+                                };
+                                ui.label(format!("{label}: {ratio:.2}:1 · {pass}"));
+                            }
+                        }
+                    }
+                });
+            });
+        });
+
+        self.settings_tab = tab;
+        self.custom_hue = custom_hue;
+        self.custom_sat = custom_sat;
+        self.custom_val = custom_val;
+        self.contrast_idx = contrast_idx;
+
+        if transparency != self.transparency_effects {
+            self.transparency_effects = transparency;
+            self.acrylic_cache = AcrylicCache::default();
+        }
+        if accent_on != self.accent_on_surfaces {
+            self.accent_on_surfaces = accent_on;
+            self.acrylic_cache = AcrylicCache::default();
+        }
+        if accent_from_bg != self.accent_from_background {
+            self.accent_from_background = accent_from_bg;
+            if accent_from_bg {
+                self.set_accent(accent_from_bitmap(&self.wallpaper_bmp));
+            }
+        }
+        if let Some(id) = set_wallpaper {
+            self.set_wallpaper(id);
+        }
+        if let Some(path) = recent_pick {
+            self.apply_wallpaper_file(PathBuf::from(path));
+        }
+        if browse_wallpaper {
+            self.browse_wallpaper();
+        }
+        if let Some(s) = set_scale {
+            self.set_output_scale(s);
+        }
+        if let Some(c) = set_accent {
+            self.set_accent(c);
+        }
+        if apply_custom {
+            self.set_accent(hsv_to_rgb(self.custom_hue, self.custom_sat, self.custom_val));
+        }
+        if let Some(t) = set_theme {
+            self.theme = t;
+            self.refresh_palette();
+            self.acrylic_cache = AcrylicCache::default();
+        }
+        if close {
+            self.snap.panel = Panel::None;
+        }
+    }
+
+    fn draw_launcher(&mut self, ui: &mut egui::Ui, desktop: egui::Rect) {
+        // Light 10X: soft veil, not a heavy black dim.
+        ui.painter().rect_filled(
+            desktop,
+            0.0,
+            if matches!(self.theme, Fluent1Theme::Light) {
+                Color32::from_rgba_unmultiplied(255, 255, 255, if self.nested { 18 } else { 28 })
+            } else if self.nested {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 60)
+            } else {
+                self.pal.overlay
+            },
+        );
+        let card = inset_card(desktop, 28.0, 48.0, 16.0, 48.0);
+        let pal = self.pal;
+        let backdrop = self.acrylic(desktop);
+        fluent1::paint_acrylic(ui, card, &pal, backdrop);
+        self.reveal.paint_on(ui, card, &self.pal);
+
+        let q = self.search.to_lowercase();
+        let show_all = self.show_all_apps || !q.is_empty();
+        let apps: Vec<_> = {
+            let mut list: Vec<_> = self
+                .snap
+                .apps
+                .iter()
+                .filter(|a| q.is_empty() || a.name.to_lowercase().contains(&q))
+                .cloned()
+                .collect();
+            if !show_all {
+                // Prefer pinned first, then fill to a 5×3 grid.
+                list.sort_by_key(|a| (!a.pinned, a.name.to_lowercase()));
+                list.truncate(15);
+            } else {
+                list.truncate(60);
+            }
+            list
+        };
+        let recent = self.snap.recent.clone();
+        let mut launch_id: Option<String> = None;
+        let mut toggle_all = false;
+
+        ui.scope_builder(UiBuilder::new().max_rect(card), |ui| {
+            ui.winui(|ui| {
+                ui.column(|ui| {
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.add_sized(
+                            egui::vec2((ui.available_width() - 16.0).max(120.0), 36.0),
+                            egui::TextEdit::singleline(&mut self.search)
+                                .hint_text("Search the web or your devices.")
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+
+                    ui.add_space(18.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(
+                            RichText::new("My apps and websites")
+                                .strong()
+                                .size(15.0)
+                                .color(pal.text),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(20.0);
+                            let label = if self.show_all_apps {
+                                "Show less"
+                            } else {
+                                "Show all"
+                            };
+                            if ui.button(label).clicked() {
+                                toggle_all = true;
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+                    // Reserve Recent band (~28% of card) unless showing all apps.
+                    let grid_top = ui.cursor().top();
+                    let grid_bottom = if show_all {
+                        card.max.y - 20.0
+                    } else {
+                        (card.max.y - card.height() * 0.28).max(grid_top + 120.0)
+                    };
+                    let grid_rect = egui::Rect::from_min_max(
+                        egui::pos2(card.min.x + 16.0, grid_top),
+                        egui::pos2(card.max.x - 16.0, grid_bottom),
+                    );
+
+                    if show_all {
+                        egui::ScrollArea::vertical()
+                            .max_height(grid_rect.height())
+                            .show(ui, |ui| {
+                                if let Some(id) =
+                                    paint_app_grid(ui, grid_rect, &apps, &pal, 5, None)
+                                {
+                                    launch_id = Some(id);
+                                }
+                            });
+                    } else if let Some(id) =
+                        paint_app_grid(ui, grid_rect, &apps, &pal, 5, Some(3))
+                    {
+                        launch_id = Some(id);
+                    }
+
+                    if !show_all {
+                        // Jump past the absolute-positioned grid band.
+                        ui.allocate_exact_size(
+                            egui::vec2(grid_rect.width(), grid_rect.height()),
+                            Sense::hover(),
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(20.0);
+                            ui.label(
+                                RichText::new("Recent").strong().size(15.0).color(pal.text),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        if recent.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new(
+                                        "The more you use your device, the more we'll show your recent files and new apps here.",
+                                    )
+                                    .size(13.0)
+                                    .color(pal.text_secondary),
+                                );
+                            });
+                        } else {
+                            for item in recent.iter().take(6) {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(24.0);
+                                    ui.label(RichText::new(item).size(13.0).color(pal.text));
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+        });
+
+        if toggle_all {
+            self.show_all_apps = !self.show_all_apps;
+        }
+        if let Some(id) = launch_id {
+            self.launch(&id);
+        }
+    }
+
+    fn draw_action_center(&mut self, ui: &mut egui::Ui, desktop: egui::Rect) {
+        ui.painter().rect_filled(
+            desktop,
+            0.0,
+            if self.nested {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 60)
+            } else {
+                self.pal.overlay
+            },
+        );
+        let width = 360.0_f32.min(desktop.width() - 24.0);
+        let card = egui::Rect::from_min_max(
+            egui::pos2(desktop.max.x - width - 16.0, desktop.min.y + 20.0),
+            egui::pos2(desktop.max.x - 16.0, desktop.max.y - 12.0),
+        );
+        let pal = self.pal;
+        let backdrop = self.acrylic(desktop);
+        fluent1::paint_acrylic_strong(ui, card, &pal, backdrop);
+        self.reveal.paint_on(ui, card, &self.pal);
+
+        let notes = self.snap.notifications.clone();
+        let mut dismiss: Option<u64> = None;
+        let mut clear_all = false;
+        let mut close = false;
+        let mut open_settings = false;
+
+        ui.scope_builder(UiBuilder::new().max_rect(card), |ui| {
+            ui.winui(|ui| {
+                ui.column(|ui| {
+                    ui.add_space(10.0);
+                    ui.row(|ui| {
+                        ui.label(RichText::new("Notifications").strong().size(16.0));
+                        if ui.button("Clear all").clicked() {
+                            clear_all = true;
+                        }
+                    });
+
+                    if notes.is_empty() {
+                        ui.label(RichText::new("No new notifications").weak());
+                    } else {
+                        for n in &notes {
+                            ui.card(&n.app, &n.title, |ui| {
+                                ui.label(&n.body);
+                                if ui.button("Dismiss").clicked() {
+                                    dismiss = Some(n.id);
+                                }
+                            });
+                        }
+                    }
+
+                    ui.add_space(8.0);
+                    ui.card("Media", "Now playing", |ui| {
+                        ui.label(if self.media_playing {
+                            "Demo Track — Artist"
+                        } else {
+                            "Paused"
+                        });
+                        if ui
+                            .button(if self.media_playing { "Pause" } else { "Play" })
+                            .clicked()
+                        {
+                            self.media_playing = !self.media_playing;
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Quick settings").strong().size(16.0));
+                    ui.toggle(&mut self.quick_wifi, "Wi‑Fi");
+                    if ui
+                        .button(if self.expand_wifi {
+                            "Hide Wi‑Fi"
+                        } else {
+                            "Wi‑Fi details"
+                        })
+                        .clicked()
+                    {
+                        self.expand_wifi = !self.expand_wifi;
+                    }
+                    if self.expand_wifi {
+                        ui.label(RichText::new("Connected · DemoNet").weak());
+                    }
+                    ui.toggle(&mut self.quick_bt, "Bluetooth");
+                    if ui
+                        .button(if self.expand_bt {
+                            "Hide Bluetooth"
+                        } else {
+                            "Bluetooth details"
+                        })
+                        .clicked()
+                    {
+                        self.expand_bt = !self.expand_bt;
+                    }
+                    if self.expand_bt {
+                        ui.label(RichText::new("Devices nearby").weak());
+                    }
+                    ui.toggle(&mut self.quick_a11y, "Accessibility");
+                    if ui
+                        .button(if self.expand_a11y {
+                            "Hide Accessibility"
+                        } else {
+                            "Accessibility details"
+                        })
+                        .clicked()
+                    {
+                        self.expand_a11y = !self.expand_a11y;
+                    }
+                    if self.expand_a11y {
+                        ui.label(RichText::new("Magnifier · Narrator stubs").weak());
+                    }
+
+                    let spacer = (ui.available_height() - 56.0).max(8.0);
+                    ui.add_space(spacer);
+                    ui.row(|ui| {
+                        ui.label("86%");
+                        if ui
+                            .icon_button(FluentIcon::Settings)
+                            .on_hover_text("Desktop settings")
+                            .clicked()
+                        {
+                            open_settings = true;
+                        }
+                        if ui
+                            .icon_button(FluentIcon::Power)
+                            .on_hover_text("Power")
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                        if ui
+                            .icon_button(FluentIcon::Person)
+                            .on_hover_text("User")
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                });
+            });
+        });
+
+        if clear_all {
+            self.snap.notifications.clear();
+        }
+        if let Some(id) = dismiss {
+            self.snap.notifications.retain(|x| x.id != id);
+        }
+        if open_settings {
+            self.snap.panel = Panel::DesktopSettings;
+        }
+        if close {
+            self.snap.panel = Panel::None;
+        }
+    }
+
+    fn draw_task_view(&mut self, ui: &mut egui::Ui, desktop: egui::Rect) {
+        ui.painter().rect_filled(
+            desktop,
+            0.0,
+            if self.nested {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 60)
+            } else {
+                self.pal.overlay
+            },
+        );
+        let card = inset_card(desktop, 20.0, 16.0, 12.0, 16.0);
+        let pal = self.pal;
+        let backdrop = self.acrylic(desktop);
+        fluent1::paint_acrylic(ui, card, &pal, backdrop);
+        self.reveal.paint_on(ui, card, &self.pal);
+
+        let running: Vec<_> = self.snap.apps.iter().filter(|a| a.running).cloned().collect();
+        let mut activate: Option<String> = None;
+        let mut close = false;
+
+        ui.scope_builder(UiBuilder::new().max_rect(card), |ui| {
+            ui.winui(|ui| {
+                ui.column(|ui| {
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("Task View").strong().size(22.0));
+                    ui.label(RichText::new("Tap a window to switch").weak().size(13.0));
+                    ui.add_space(14.0);
+
+                    if running.is_empty() {
+                        ui.label("No open apps — launch from Start");
+                    } else {
+                        ui.wrap(|ui| {
+                            for app in &running {
+                                let id = app.id.clone();
+                                let tip = app.name.clone();
+                                let ic = app_icon(&app.name, &app.id);
+                                if ui.icon_button(ic).on_hover_text(tip).clicked() {
+                                    activate = Some(id);
+                                }
+                            }
+                        });
+                    }
+
+                    let spacer = (ui.available_height() - 48.0).max(8.0);
+                    ui.add_space(spacer);
+                    if ui
+                        .icon_button(FluentIcon::Close)
+                        .on_hover_text("Close")
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+        });
+
+        if let Some(id) = activate {
+            if let Some(a) = self.snap.apps.iter().find(|x| x.id == id) {
+                let _ = apps::launch(a);
+            }
+            self.snap.panel = Panel::None;
+        }
+        if close {
+            self.snap.panel = Panel::None;
+        }
+    }
+}
+
+fn paint_running_dot(ui: &mut egui::Ui, rect: egui::Rect, icon: f32, accent: Color32) {
+    ui.painter().rect_filled(
+        egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, rect.bottom() + 3.0),
+            egui::vec2(icon * 0.35, 3.0),
+        ),
+        CornerRadius::ZERO,
+        accent,
+    );
+}
+
+fn paint_swatch(ui: &mut egui::Ui, rect: egui::Rect, color: Color32, selected: bool) {
+    ui.painter().rect_filled(rect, CornerRadius::ZERO, color);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::ZERO,
+        Stroke::new(
+            if selected { 2.0 } else { 1.0 },
+            if selected {
+                Color32::WHITE
+            } else {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 70)
+            },
+        ),
+        StrokeKind::Inside,
+    );
+}
+
+fn paint_contrast_preview(ui: &mut egui::Ui, theme: desktop::ContrastTheme, accent: Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().min(420.0), 140.0), Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, theme.bg);
+    ui.painter().text(
+        egui::pos2(rect.min.x + 16.0, rect.min.y + 24.0),
+        egui::Align2::LEFT_CENTER,
+        "Sample hyperlink text",
+        egui::FontId::proportional(16.0),
+        theme.hyperlink,
+    );
+    ui.painter().text(
+        egui::pos2(rect.min.x + 16.0, rect.min.y + 52.0),
+        egui::Align2::LEFT_CENTER,
+        "Body text on contrast background",
+        egui::FontId::proportional(14.0),
+        theme.text,
+    );
+    ui.painter().text(
+        egui::pos2(rect.min.x + 16.0, rect.min.y + 78.0),
+        egui::Align2::LEFT_CENTER,
+        "Disabled text",
+        egui::FontId::proportional(13.0),
+        theme.disabled,
+    );
+    let btn = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + 16.0, rect.max.y - 40.0),
+        egui::vec2(110.0, 28.0),
+    );
+    ui.painter().rect_filled(btn, 0.0, theme.button);
+    ui.painter().rect_stroke(
+        btn,
+        0.0,
+        Stroke::new(1.0, theme.selected),
+        StrokeKind::Inside,
+    );
+    ui.painter().text(
+        btn.center(),
+        egui::Align2::CENTER_CENTER,
+        "Button",
+        egui::FontId::proportional(13.0),
+        theme.text,
+    );
+    let accent_chip = egui::Rect::from_min_size(
+        egui::pos2(rect.max.x - 56.0, rect.min.y + 16.0),
+        egui::vec2(36.0, 36.0),
+    );
+    ui.painter().rect_filled(accent_chip, 0.0, accent);
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
+    let h = ((h % 360.0) + 360.0) % 360.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h {
+        h if h < 60.0 => (c, x, 0.0),
+        h if h < 120.0 => (x, c, 0.0),
+        h if h < 180.0 => (0.0, c, x),
+        h if h < 240.0 => (0.0, x, c),
+        h if h < 300.0 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    Color32::from_rgb(
+        ((r + m) * 255.0).round() as u8,
+        ((g + m) * 255.0).round() as u8,
+        ((b + m) * 255.0).round() as u8,
+    )
+}
+
+fn paint_wallpaper_swatch(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    top: Color32,
+    bottom: Color32,
+    selected: bool,
+    accent: Color32,
+) {
+    let mid = rect.center().y;
+    ui.painter().rect_filled(
+        egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, mid)),
+        CornerRadius::ZERO,
+        top,
+    );
+    ui.painter().rect_filled(
+        egui::Rect::from_min_max(egui::pos2(rect.min.x, mid), rect.max),
+        CornerRadius::ZERO,
+        bottom,
+    );
+    let stroke = if selected {
+        Stroke::new(2.0, accent)
+    } else {
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 40))
+    };
+    ui.painter()
+        .rect_stroke(rect, CornerRadius::ZERO, stroke, StrokeKind::Inside);
+}
+
+fn mode_chip(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: FluentIcon,
+    selected: bool,
+    accent: Color32,
+) -> egui::Response {
+    let desired = egui::vec2(120.0, 72.0);
+    let (rect, resp) = ui.allocate_exact_size(desired, Sense::click());
+    let fill = if selected {
+        Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 48)
+    } else {
+        Color32::from_rgba_unmultiplied(128, 128, 128, 36)
+    };
+    ui.painter().rect(
+        rect,
+        CornerRadius::ZERO,
+        fill,
+        Stroke::new(
+            if selected { 2.0 } else { 1.0 },
+            if selected {
+                accent
+            } else {
+                Color32::from_rgba_unmultiplied(255, 255, 255, 40)
+            },
+        ),
+        StrokeKind::Inside,
+    );
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.min.y + 28.0),
+        egui::Align2::CENTER_CENTER,
+        icon.glyph(),
+        fluent_egui::winui::icon_font_id(22.0),
+        ui.visuals().text_color(),
+    );
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.max.y - 16.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        ui.visuals().text_color(),
+    );
+    resp
+}
+
+/// Tile apps into `grid_rect`.
+/// - Default Start: `rows = Some(3)` → fixed **5×3**, cells fill the rect.
+/// - Show all: `rows = None` → 5 columns, scrollable.
+/// Icon frames are always **16:9** or **4:3**; app name is drawn **inside** the frame.
+fn paint_app_grid(
+    ui: &mut egui::Ui,
+    grid_rect: egui::Rect,
+    apps: &[win10x_protocol::AppEntry],
+    pal: &Palette,
+    columns: usize,
+    rows: Option<usize>,
+) -> Option<String> {
+    let columns = columns.max(1);
+    let mut launch = None;
+
+    if grid_rect.width() < 40.0 || grid_rect.height() < 40.0 {
+        return None;
+    }
+
+    ui.scope_builder(UiBuilder::new().max_rect(grid_rect), |ui| {
+        let area = ui.max_rect();
+        let (cell_w, cell_h, row_count) = if let Some(r) = rows {
+            let r = r.max(1);
+            (area.width() / columns as f32, area.height() / r as f32, r)
+        } else {
+            let cw = area.width() / columns as f32;
+            // Cell height tracks a 16:9 frame plus a little outer padding.
+            let ch = (cw / (16.0 / 9.0) + 12.0).clamp(72.0, 132.0);
+            let needed = apps.len().div_ceil(columns).max(1);
+            (cw, ch, needed)
+        };
+
+        for row in 0..row_count {
+            for col in 0..columns {
+                let i = row * columns + col;
+                let cell = egui::Rect::from_min_size(
+                    egui::pos2(
+                        area.min.x + col as f32 * cell_w,
+                        area.min.y + row as f32 * cell_h,
+                    ),
+                    egui::vec2(cell_w, cell_h),
+                );
+
+                let Some(app) = apps.get(i) else {
+                    continue;
+                };
+                let id = app.id.clone();
+                let name = app.name.clone();
+                let ic = app_icon(&name, &id);
+
+                let resp = ui.interact(cell, ui.id().with(("app_tile", i)), Sense::click());
+
+                let pad = (cell_w.min(cell_h) * 0.06).clamp(4.0, 10.0);
+                let frame_budget = egui::vec2(
+                    (cell_w - pad * 2.0).max(16.0),
+                    (cell_h - pad * 2.0).max(16.0),
+                );
+                let frame_size = fit_icon_frame(frame_budget);
+                let frame = egui::Rect::from_center_size(cell.center(), frame_size);
+
+                let frame_fill = if resp.hovered() {
+                    Color32::from_rgba_unmultiplied(
+                        pal.control.r(),
+                        pal.control.g(),
+                        pal.control.b(),
+                        220,
+                    )
+                } else {
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 200)
+                };
+                ui.painter().rect(
+                    frame,
+                    CornerRadius::same(4),
+                    frame_fill,
+                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 28)),
+                    StrokeKind::Inside,
+                );
+
+                // Name sits inside the frame; icon occupies the upper band.
+                let inner = frame.shrink2(egui::vec2(6.0, 5.0));
+                let label_band = (inner.height() * 0.28).clamp(14.0, 22.0);
+                let icon_band = egui::Rect::from_min_max(
+                    inner.min,
+                    egui::pos2(inner.max.x, inner.max.y - label_band),
+                );
+                let icon_px = (icon_band.height() * 0.62).clamp(16.0, 44.0);
+                let label_px = (label_band * 0.72).clamp(10.0, 13.0);
+                let max_chars = ((inner.width() / (label_px * 0.55)).floor() as usize).clamp(6, 20);
+
+                ui.painter().text(
+                    icon_band.center(),
+                    egui::Align2::CENTER_CENTER,
+                    ic.glyph(),
+                    fluent_egui::winui::icon_font_id(icon_px),
+                    pal.accent,
+                );
+                ui.painter().text(
+                    egui::pos2(inner.center().x, inner.max.y - label_band * 0.42),
+                    egui::Align2::CENTER_CENTER,
+                    truncate_label(&name, max_chars),
+                    egui::FontId::proportional(label_px),
+                    pal.text,
+                );
+                if resp.on_hover_text(&name).clicked() {
+                    launch = Some(id);
+                }
+            }
+        }
+
+        if rows.is_none() {
+            let h = cell_h * row_count as f32;
+            ui.allocate_exact_size(egui::vec2(area.width(), h), Sense::hover());
+        }
+    });
+
+    launch
+}
+
+/// Largest **16:9** or **4:3** frame that fits in `budget` (pick the bigger area).
+fn fit_icon_frame(budget: egui::Vec2) -> egui::Vec2 {
+    const R16_9: f32 = 16.0 / 9.0;
+    const R4_3: f32 = 4.0 / 3.0;
+
+    let fit = |ratio: f32| -> egui::Vec2 {
+        let by_w = egui::vec2(budget.x, budget.x / ratio);
+        if by_w.y <= budget.y + 0.01 {
+            return by_w;
+        }
+        egui::vec2(budget.y * ratio, budget.y)
+    };
+
+    let a = fit(R16_9);
+    let b = fit(R4_3);
+    if a.x * a.y >= b.x * b.y {
+        a
+    } else {
+        b
+    }
+}
+
+fn truncate_label(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn inset_card(desktop: egui::Rect, top: f32, right: f32, bottom: f32, left: f32) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(desktop.min.x + left, desktop.min.y + top),
+        egui::pos2(desktop.max.x - right, desktop.max.y - bottom),
+    )
+}

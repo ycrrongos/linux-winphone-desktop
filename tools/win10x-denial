@@ -1,0 +1,888 @@
+#!/usr/bin/env python3
+"""Build Win10X with a pinned, user-local Denial release kit."""
+import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import zipfile
+
+ROOT = Path(__file__).resolve().parents[1]
+LOCK = json.loads((ROOT / "denial/upstream.lock.json").read_text())
+CACHE = Path(os.environ.get("WIN10X_DENIAL_CACHE",
+    str(Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+        / "win10x-denial"))) / LOCK["release"]
+WORK = ROOT / "target/denial"
+KIT = WORK / "kit"
+APP = WORK / "app"
+SHELL = ROOT / "flutter_shell"
+os.environ["FLUTTER_ROOT"] = str(KIT / "flutter")
+
+
+def run(*args, cwd=ROOT, **kwargs):
+    print("+", " ".join(map(str, args)), flush=True)
+    return subprocess.run(list(map(str, args)), cwd=cwd, check=True, **kwargs)
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def source_digest():
+    files = [ROOT / "denial/main.dart", ROOT / "denial/desktop_overrides.dart",
+        ROOT / "denial/shell_chrome.dart", ROOT / "denial/window_motion_policy.dart",
+        ROOT / "denial/preview_capture.dart", ROOT / "denial/client_surface_policy.dart", ROOT / "denial/upstream.lock.json",
+        ROOT / "denial/application.pubspec.lock", Path(__file__).resolve(),
+        SHELL / "pubspec.yaml", SHELL / "pubspec.lock"]
+    files.extend(sorted((SHELL / "lib").rglob("*.dart")))
+    files.extend(sorted((ROOT / "denial/keyboard").rglob("*.dart")))
+    files.extend(sorted(path for path in (SHELL / "assets").rglob("*") if path.is_file()))
+    value = hashlib.sha256()
+    for path in files:
+        value.update(str(path.relative_to(ROOT)).encode())
+        value.update(path.read_bytes())
+    return value.hexdigest()
+
+
+def download(url, path, checksum):
+    if path.exists() and digest(path) == checksum:
+        return
+    partial = path.with_suffix(path.suffix + ".partial")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    run("curl", "--fail", "--location", "--show-error", "--retry", "2",
+        "--connect-timeout", "15", "--max-time", "600", "--continue-at", "-",
+        url, "--output", partial)
+    if digest(partial) != checksum:
+        partial.unlink()
+        raise RuntimeError(f"Checksum mismatch: {url}; removed invalid download")
+    partial.replace(path)
+
+
+def bootstrap():
+    if platform.system() != "Linux" or platform.machine() not in ("x86_64", "amd64"):
+        raise RuntimeError("This binary kit supports Linux x86_64. ARM64 needs "
+            "a matching upstream engine and kit; see docs/denial-migration.md.")
+    archives = CACHE / "downloads"
+    archives.mkdir(parents=True, exist_ok=True)
+    for package in LOCK["packages"]["linux-x64"]:
+        archive = archives / package["file"]
+        download("https://packages.denialwm.org/arch/x86_64/" + package["file"],
+            archive, package["sha256"])
+        marker = archives / (package["file"] + ".extracted")
+        if not marker.exists():
+            # These are checksum-verified official archives, extracted locally.
+            run("tar", "-xf", archive, "-C", CACHE)
+            marker.write_text(package["sha256"] + "\n")
+    sdk = CACHE / "dart-sdk"
+    if not (sdk / "bin/dart").exists():
+        archive = archives / "dart-sdk.zip"
+        download(f"https://storage.googleapis.com/dart-archive/channels/stable/release/{LOCK['dart']}/sdk/dartsdk-linux-x64-release.zip",
+            archive, LOCK["dart_sdk_sha256"])
+        with zipfile.ZipFile(archive) as source:
+            source.extractall(CACHE)
+            for member in source.infolist():
+                mode = member.external_attr >> 16
+                if mode & 0o111:
+                    (CACHE / member.filename).chmod(mode & 0o777)
+    prepare()
+
+
+def link(path, target):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        if path.resolve() == target.resolve():
+            return
+        path.unlink()
+    if path.exists():
+        raise RuntimeError(f"Refusing to replace existing path: {path}")
+    path.symlink_to(target, target_is_directory=target.is_dir())
+
+
+def replace_once(path, before, after, expected=1):
+    text = path.read_text()
+    if after in text:
+        return
+    if text.count(before) != expected:
+        raise RuntimeError(f"Upstream patch context changed: {path}")
+    path.write_text(text.replace(before, after, 1))
+
+
+TOUCH_LAYOUT_POLICY = """    // Keep the desktop placement snapshot so changing modes is reversible.
+    _win10xSavedFrames.removeWhere((id, _) => !activeIds.contains(id));
+    final transientIds = {for (final w in userWindows) if (w.transientParentObjectId != null) w.objectId};
+    for (final entry in next.entries.toList()) {
+      final p = entry.value;
+      if (win10xShellMode.value == 1) {
+        final saved = _win10xSavedFrames.remove(entry.key);
+        if (saved != null) {
+          next[entry.key] = p.copyWith(frame: saved.frame, maximized: saved.maximized,
+            fullscreen: saved.fullscreen, restoreFrame: saved.restoreFrame,
+            clearRestoreFrame: saved.restoreFrame == null, fullscreenRestoreFrame: saved.fullscreenRestoreFrame,
+            clearFullscreenRestoreFrame: saved.fullscreenRestoreFrame == null);
+          _pendingFlutterProposedFrames[entry.key] = saved.frame;
+          changed = true;
+        }
+      } else if (!p.fullscreen && !transientIds.contains(entry.key) &&
+          (win10xShellMode.value == 2 || _windowLayout == DesktopWindowLayout.stacking)) {
+        _win10xSavedFrames.putIfAbsent(entry.key, () => p);
+        final rawBounds = _maximizedFrame(p.monitorId, viewSize);
+        final bounds = win10xShellMode.value == 2 ? Rect.fromLTRB(rawBounds.left, rawBounds.top + 24, rawBounds.right, rawBounds.bottom) : rawBounds;
+        if (p.frame != bounds || !p.maximized) {
+          next[entry.key] = p.copyWith(frame: bounds, maximized: true,
+            restoreFrame: p.restoreFrame ?? p.frame, serverFrameWhileMaximized: false);
+          _pendingFlutterProposedFrames[entry.key] = bounds;
+          changed = true;
+        }
+      }
+    }
+"""
+
+
+def prepare():
+    source = CACHE / "usr/lib/denial/plugin-build-kit"
+    if not (source / "kit.json").exists() or not (CACHE / "dart-sdk/bin/dart").exists():
+        raise RuntimeError("Missing compiler inputs; run tools/win10x-denial bootstrap")
+    manifest = json.loads((source / "kit.json").read_text())
+    if manifest["identity"]["source_revision"] != LOCK["revision"]:
+        raise RuntimeError("Compiler kit does not match the locked Denial revision")
+    if not KIT.exists():
+        for relative, expected in manifest["files"].items():
+            if digest(source / relative) != expected:
+                raise RuntimeError(f"Compiler kit file changed: {relative}")
+        WORK.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix="kit-", dir=WORK))
+        try:
+            shutil.copytree(source, staging, symlinks=True, dirs_exist_ok=True)
+            staging.rename(KIT)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+    patch_marker = KIT / ".win10x-preparation"
+    patch_identity = digest(Path(__file__).resolve())
+    # Restore before EVERY preparation: adjacent insertions can split another
+    # patch's after-string, so substring guards alone are not idempotent.
+    for relative in manifest["files"]:
+        if relative.startswith("runtime/"):
+            original, destination = source / relative, KIT / relative
+            if original.is_file() and (not destination.exists() or digest(original) != digest(destination)):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(original, destination)
+    link(KIT / "flutter/bin/cache/dart-sdk", CACHE / "dart-sdk")
+    link(KIT / "engine/out/denial_host_release/dart-sdk", CACHE / "dart-sdk")
+
+    # Win10X touch modes use the native text-input broker even with desktop
+    # containment. Do not enable the unrelated mobile app-minimization policy.
+    reference = KIT / "runtime/plugins/denial_desktop/lib/src/state/reference_shell_controller.dart"
+    replace_once(reference, "import 'dart:async';",
+        "import 'dart:async';\nimport 'win10x_desktop_overrides.dart';")
+    replace_once(reference, "if (!_automaticSoftwareKeyboard) {",
+        "if (!_automaticSoftwareKeyboard && win10xShellMode.value == 1) {")
+
+    shutil.copyfile(SHELL / "lib/src/keyboard_policy.dart", reference.parent / "win10x_keyboard_policy.dart")
+    replace_once(reference, "import 'win10x_desktop_overrides.dart';", "import 'win10x_desktop_overrides.dart';\nimport 'win10x_keyboard_policy.dart';")
+    replace_once(reference, "  bool _automaticSoftwareKeyboard = false;", "  bool _automaticSoftwareKeyboard = false;\n  final _keyboardPolicy = TouchKeyboardPolicy();")
+    replace_once(reference, "    if (input.inputPanelVisible) {", "    if (_keyboardPolicy.update(active: input.active, requested: input.inputPanelVisible, serial: input.activationSerial, allowAutofocus: win10xShellMode.value != 1)) {")
+    replace_once(reference, "_bridge.dismissKeyboardPanel(input.activationSerial);", "_keyboardPolicy.dismiss(input.activationSerial);\n          _bridge.dismissKeyboardPanel(input.activationSerial);")
+    replace_once(reference, "_bridge.dismissKeyboardPanel(_edgePanelDismissalSerial!);", "_keyboardPolicy.dismiss(_edgePanelDismissalSerial!);\n      _bridge.dismissKeyboardPanel(_edgePanelDismissalSerial!);")
+    services = KIT / "runtime/plugins/denial_desktop/lib/src/core/shell_plugin_services.dart"
+    replace_once(services, "      started = await ref.read(appLauncherProvider).launch(app);", "      final launcher = ref.read(appLauncherProvider);\n      if (launcher.usesLegacyTextInput(app)) { ref.read(referenceShellProvider.notifier).registerLegacyTextInputAppIds(launcher.expectedWindowAppIds(app)); }\n      started = await launcher.launch(app);")
+
+    shutil.copyfile(SHELL / "lib/src/wp_motion.dart", reference.parent / "win10x_wp_motion.dart")
+    edge_keyboard = KIT / "runtime/plugins/denial_desktop/lib/src/widgets/edge_panel_layer.dart"
+    replace_once(edge_keyboard, "import 'package:flutter/widgets.dart';",
+        "import 'package:flutter/widgets.dart';\nimport '../state/win10x_wp_motion.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(edge_keyboard, "springTo(\n        _controller,\n        visible ? 1.0 : 0.0,\n        spring: Motion.gentle,\n        telemetryLabel: 'edge_panel_settle',\n      );",
+        "_controller.animateTo(visible ? 1.0 : 0.0, duration: visible ? WpMotion.barEnter : WpMotion.barExit, curve: visible ? WpMotion.enter : WpMotion.exit);")
+    replace_once(edge_keyboard, "reportKeyboardPanelMotion(\n          height,\n          springSettleDuration(\n            _controller.value,\n            visible ? 1.0 : 0.0,\n            extent: _panelHeight,\n          ),\n        )", "reportKeyboardPanelMotion(\n          height,\n          visible ? WpMotion.barEnter : WpMotion.barExit,\n        )")
+    replace_once(edge_keyboard, "color: theme.panelColor(context.shellColors.panelBackground),",
+        "color: win10xShellMode.value == 2 ? const Color(0xff171717) : theme.panelColor(context.shellColors.panelBackground),")
+    replace_once(edge_keyboard, "child: const _EdgePanelContent(),", "child: Padding(padding: EdgeInsets.only(bottom: win10xShellMode.value == 2 ? 48 : 0), child: const _EdgePanelContent()),")
+    replace_once(edge_keyboard, "bottom: ReferenceShellMetrics.gestureBottomInset,", "bottom: win10xShellMode.value == 2 ? 48 : ReferenceShellMetrics.gestureBottomInset,")
+
+    replace_once(edge_keyboard, "behavior: HitTestBehavior.opaque,\n          onVerticalDragStart: (_) => controller.startEdgePanelDrag(),", "behavior: win10xShellMode.value == 2 ? HitTestBehavior.deferToChild : HitTestBehavior.opaque,\n          onVerticalDragStart: (_) => controller.startEdgePanelDrag(),")
+
+    system_hud = KIT / "runtime/plugins/denial_desktop/lib/src/widgets/system_level_hud.dart"
+    replace_once(system_hud, "import '../state/system_level_hud.dart';", "import '../state/system_level_hud.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(system_hud, "    final hud = ref.watch(systemLevelHudProvider);", "    final hud = ref.watch(systemLevelHudProvider);\n    if (win10xShellMode.value == 2 && hud?.kind == SystemLevelHudKind.audio) {\n      return win10xPhoneAudioHudBuilder?.call(context, hud!.revision, hud.visible, () => ref.read(systemLevelHudProvider.notifier).completeDismissal(hud.revision)) ?? const SizedBox.shrink();\n    }")
+
+    osk_root = KIT / "runtime/plugins/denial_desktop/lib/src/widgets/osk"
+    for name in ("pinyin_engine.dart", "pinyin_session.dart"):
+        shutil.copyfile(SHELL / "lib/src/ime" / name, osk_root / name)
+    shutil.copyfile(ROOT / "denial/keyboard/pinyin_keyboard.dart", osk_root / "pinyin_keyboard.dart")
+    replace_once(edge_keyboard, "import 'osk/shell_osk_panel.dart';", "import 'osk/shell_osk_panel.dart';\nimport 'osk/pinyin_keyboard.dart';")
+    replace_once(edge_keyboard, "child: ShellOskPanel(", "child: Win10xPinyinKeyboard(")
+
+    osk = KIT / "runtime/plugins/denial_desktop/lib/src/widgets/osk/shell_osk_panel.dart"
+    replace_once(osk, "import 'dart:async';", "import 'dart:async';\nimport '../../state/win10x_desktop_overrides.dart';")
+    replace_once(osk, "    final foreground = selected", "    if (win10xShellMode.value == 2) { background = pressed || selected ? accent : control == null ? const Color(0xff3b3b3b) : const Color(0xff242424); }\n    final foreground = win10xShellMode.value == 2 ? const Color(0xffffffff) : selected")
+    replace_once(osk, "borderRadius: theme.borderRadius(12),", "borderRadius: win10xShellMode.value == 2 ? BorderRadius.zero : theme.borderRadius(12),")
+    replace_once(osk, "borderRadius: context.shellTheme.borderRadius(14),", "borderRadius: win10xShellMode.value == 2 ? BorderRadius.zero : context.shellTheme.borderRadius(14),")
+
+    power_bindings = KIT / "runtime/plugins/denial_desktop/lib/src/core/shell_runtime_bindings.dart"
+    replace_once(power_bindings, "import 'dart:async';", "import 'dart:async';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(power_bindings, "dpmsEnabled: power.idleDpmsEnabled,", "dpmsEnabled: win10xManagedScreenPower ? false : power.idleDpmsEnabled, // Win10X owns idle fade only in managed native sessions.")
+
+    secure = KIT / "runtime/plugins/denial_desktop/lib/src/core/shell_secure_stage.dart"
+    replace_once(secure, "import 'package:flutter/widgets.dart';", "import 'package:flutter/widgets.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(secure, "      locked: lock.locked,", "      lockLayerBuilder: win10xLockBuilder == null ? null : (progress) => win10xLockBuilder!(context, progress),\n      locked: lock.locked,")
+
+    # Shared geometry is consumed by drawing AND native hit testing.
+    metrics = KIT / "runtime/plugins/denial_desktop/lib/src/desktop/desktop_workspace.dart"
+    replace_once(metrics,
+        "return placement.resolve(_outputBounds(viewSize, outputRect));",
+        "final bounds = _outputBounds(viewSize, outputRect);\n    return win10xLauncherBounds?.call(bounds) ?? bounds; // Win10X mode Start",
+        expected=2)
+    replace_once(metrics, "import 'desktop_overview_layout.dart';",
+        "import 'desktop_overview_layout.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    panel = KIT / "runtime/plugins/denial_desktop/lib/src/desktop/desktop_panel_overlay.dart"
+    replace_once(panel,
+        "entryDirection: desktopPanelEntryDirection(\n"
+        "                overlaySettings.launcher.anchor.horizontal,\n"
+        "                overlaySettings.launcher.anchor.vertical,\n"
+        "              ),",
+        "entryDirection: Offset.zero, // Win10X background crossfade")
+    transition = KIT / "runtime/plugins/denial_desktop/lib/src/desktop/desktop_panel_transition.dart"
+    # Start owns opacity for both entrance and reverse close; host only holds the
+    # scene for the exit duration instead of fading the whole page away.
+    replace_once(transition, "              if (fadesInPlace) {",
+        "              if (widget.inputDebugLabel == 'Desktop application launcher') {\n"
+        "                return widget.child; // Win10X owns launcher opacity\n"
+        "              } // Win10X Start uses wallpaper plus white veil, no blur\n"
+        "              if (widget.inputDebugLabel == 'Desktop dashboard') {\n"
+        "                return ListenableBuilder(listenable: Listenable.merge([_progress, win10xDashboardReveal]), child: widget.child,\n"
+        "                  builder: (context, child) {\n"
+        "                    final interactive = win10xDashboardReveal.value;\n"
+        "                    if (interactive != null) _controller.value = interactive;\n"
+        "                    final t = interactive ?? _progress.value;\n"
+        "                    final followTravel = Offset(widget.entryDirection.dx * constraints.maxWidth, widget.entryDirection.dy * constraints.maxHeight);\n"
+        "                    return Transform.translate(offset: followTravel * (1 - t), child: child);\n"
+        "                  });\n"
+        "              } // Win10X flat material, no inherited backdrop blur\n"
+        "              if (fadesInPlace) {")
+    replace_once(transition, "  Duration get _closingDuration => widget.entryDirection == Offset.zero",
+        "  Duration get _closingDuration => widget.inputDebugLabel == 'Desktop application launcher'\n"
+        "      ? (win10xLauncherCloseDuration?.call() ?? const Duration(milliseconds: 1100))\n"
+        "      : widget.entryDirection == Offset.zero")
+    replace_once(transition, "import 'package:flutter/material.dart';",
+        "import 'package:flutter/material.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(transition, "    if (widget.durationScale != oldWidget.durationScale ||",
+        "    if (widget.visible != oldWidget.visible || widget.durationScale != oldWidget.durationScale ||")
+    # One native dashboard, rendered by our application rather than a second popup.
+    plugin_root = KIT / "runtime/plugins/denial_desktop/lib"
+    shutil.copyfile(ROOT / "denial/desktop_overrides.dart",
+        plugin_root / "src/state/win10x_desktop_overrides.dart")
+    public = plugin_root / "denial_desktop.dart"
+    for export_line in (
+        "export 'src/state/win10x_desktop_overrides.dart';",
+        "export 'src/state/win10x_window_motion.dart' show win10xWindowMotionEnabled;",
+    ):
+        text = public.read_text()
+        if export_line not in text:
+            public.write_text(text.replace("library;", f"library;\n{export_line}", 1))
+    dashboard = plugin_root / "src/desktop/desktop_panel_overlay.dart"
+    replace_once(dashboard, "import 'desktop_dashboard.dart';",
+        "import 'desktop_dashboard.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(dashboard, "child: _cachedDashboard(),",
+        "child: win10xDashboardBuilder?.call(context, widget.onDismissPanel, widget.onOpenSettings) ?? _cachedDashboard(),")
+    replace_once(dashboard,
+        "entryDirection: desktopPanelEntryDirection(\n"
+        "                overlaySettings.dashboard.anchor.horizontal,\n"
+        "                overlaySettings.dashboard.anchor.vertical,\n"
+        "              ),", "entryDirection: win10xShellMode.value == 2 ? const Offset(0, -1) : const Offset(1, 0), // Win10X mode action center")
+    replace_once(metrics, "return placement.resolve(_outputBounds(viewSize, outputRect));",
+        "final bounds = _outputBounds(viewSize, outputRect);\n"
+        "    return win10xDashboardBounds?.call(bounds) ?? placement.resolve(bounds); // Win10X mode panel")
+    # Mouse hover no longer competes with deliberate touch-edge gestures.
+    replace_once(metrics, "return _edgeTriggerRect(viewSize, outputRect, placement);",
+        "return Rect.zero; // Win10X explicit edge gestures", expected=2)
+    replace_once(metrics, "return _edgeTriggerRect(viewSize, outputRect, placement);",
+        "return Rect.zero; // Win10X explicit dashboard gesture")
+    shell_host = plugin_root / "src/desktop/desktop_shell.dart"
+    replace_once(shell_host, "import 'dart:async';",
+        "import 'dart:async';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(shell_host, "      child: scene,",
+        "      child: win10xDesktopDecorator?.call(context, DesktopShellServices(ref: ref,\n"
+        "        onOpenPowerSettings: _openPowerSettings, onToggleLauncher: _toggleLauncher,\n"
+        "        onOpenDashboard: _openDashboard, onToggleDashboard: _toggleDashboard), scene) ?? scene,")
+    replace_once(dashboard, "    final panelOpen = launcherOpen || dashboardOpen;",
+        "    final panelOpen = launcherOpen || dashboardOpen;\n    win10xPanelObserver?.call(launcherOpen, dashboardOpen);")
+
+    replace_once(shell_host, "    return ShellActionsBinding(",
+        "    win10xDismissKeyboard = () => ref.read(referenceShellProvider.notifier).closeEdgePanel();\n"
+        "    win10xBindCommands?.call(() { ref.read(referenceShellProvider.notifier).closeEdgePanel(); _openLauncher(); }, () {\n"
+        "      if (ref.read(referenceShellProvider).edgePanelVisible) { ref.read(referenceShellProvider.notifier).navigateBack(); return; }\n"
+        "      final workspace = ref.read(desktopWorkspaceProvider);\n"
+        "      if (workspace.panel != DesktopPanel.none || workspace.overviewActive) { _closePanels(); ref.read(desktopWorkspaceProvider.notifier).closeOverview(); return; }\n"
+        "      final window = ref.read(referenceShellProvider).primaryWindow;\n"
+        "      if (window != null) ref.read(denialBridgeProvider).navigateBack(window);\n"
+        "    }, () => _toggleOverview(null), () { _closePanels(); ref.read(shellPopupControllerProvider.notifier).dismissAllImmediately(); }, _openSettings, () {\n"
+        "      final window = ref.read(referenceShellProvider).primaryWindow;\n"
+        "      if (window != null) ref.read(denialBridgeProvider).closeWindow(window);\n"
+        "    });\n"
+        "    return ShellActionsBinding(")
+    replace_once(shell_host, "import '../state/win10x_desktop_overrides.dart';",
+        "import '../state/win10x_desktop_overrides.dart';\nimport 'package:denial_flutter_sdk/popups.dart';")
+    # Publish directional handoff strips so apps can yield an inward edge swipe.
+    publisher = plugin_root / "src/desktop/desktop_input_layout_publisher.dart"
+    replace_once(publisher, "import 'dart:math' as math;",
+        "import 'dart:math' as math;\nimport '../state/win10x_desktop_overrides.dart';")
+    # Touch policy can change the very first placement. Upstream otherwise
+    # seeds this tracker without a configure, stretching the client's old buffer.
+    replace_once(publisher, "      nativeDragActive: nativeDragActive,\n    );",
+        "      nativeDragActive: nativeDragActive,\n"
+        "      configureInitial: win10xShellMode.value != 1,\n    );")
+    replace_once(publisher, "    required bool nativeDragActive,\n  }) {\n    final geometry = (",
+        "    required bool nativeDragActive,\n    bool configureInitial = false,\n  }) {\n    final geometry = (")
+    replace_once(publisher, "    if (previous == null) {\n      // The native compositor owns initial placement and sizing.",
+        "    if (previous == null && !configureInitial) {\n      // The native compositor owns initial placement and sizing.")
+    replace_once(publisher, "      mobilePresentation: false,",
+        "      edgeSwipeRegions: [\n"
+        "        if (!interactions.capturesFullScene && !source.desktopVisible)\n"
+        "          for (final bounds in [source.displayLayout?.mainOutput?.logicalRect ?? canvas]) ...[\n"
+        "            if (win10xShellMode.value != 2) ...[\n"
+        "              InputEdgeSwipeRegion(rect: Rect.fromLTWH(bounds.left, bounds.top, 18, math.max(0, bounds.height - 48)), edge: InputEdge.left),\n"
+        "              InputEdgeSwipeRegion(rect: Rect.fromLTWH(bounds.right - 18, bounds.top, 18, math.max(0, bounds.height - 48)), edge: InputEdge.right),\n"
+        "            ],\n"
+        "            if (win10xShellMode.value != 1) InputEdgeSwipeRegion(rect: Rect.fromLTWH(bounds.left, bounds.top, bounds.width, 24), edge: InputEdge.top),\n"
+        "          ],\n"
+        "      ],\n"
+        "      mobilePresentation: false,")
+    # A mode change must invalidate source and native input-layout caches.
+    replace_once(publisher, "  bool _scheduled = false;",
+        "  bool _scheduled = false;\n"
+        "  @override void initState() { super.initState(); win10xShellMode.addListener(_modeChanged); win10xReachability.addListener(_modeChanged); }\n"
+        "  void _modeChanged() { if (mounted) setState(() { _lastSource = null; _lastSnapshot = null; }); }\n"
+        "  @override void dispose() { win10xShellMode.removeListener(_modeChanged); win10xReachability.removeListener(_modeChanged); super.dispose(); }")
+    replace_once(publisher, "      windows: inputWindows,",
+        "      windows: [for (final w in inputWindows) InputWindowRegion(window: w.window, rect: w.rect.shift(Offset(0, viewSize.height * win10xReachability.value)), sourceRect: w.sourceRect, z: w.z, surfaceId: w.surfaceId, visible: w.visible, hitTest: w.hitTest, geometryLocked: w.geometryLocked)],")
+    controller = plugin_root / "src/desktop/desktop_workspace_controller.dart"
+    replace_once(controller, "class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {",
+        "class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {\n"
+        "  final _win10xSavedFrames = <int, DesktopWindowPlacement>{};\n  int _win10xLastMode = -1;")
+    replace_once(controller, "    final serverFrameWhileMaximized =",
+        "    if (_win10xLastMode != win10xShellMode.value) { _lastSyncedWindows = null; _win10xLastMode = win10xShellMode.value; }\n"
+        "    final serverFrameWhileMaximized =")
+    replace_once(controller, "    var nextOverview = state.overview;",
+        TOUCH_LAYOUT_POLICY + "\n    var nextOverview = state.overview;")
+    # Submit native startup now. Start owns its handoff and eventual dismissal.
+    launcher = KIT / "runtime/plugins/denial_desktop/lib/src/desktop/desktop_application_launcher.dart"
+    replace_once(launcher, "widget.onLaunch(app);",
+        "ref.read(appLauncherProvider).launch(app); // Win10X concurrent startup\n"
+        "      ref.read(applicationRecentsProvider.notifier).record(id);")
+
+    plugin = KIT / "runtime/plugins/denial_desktop/lib"
+    shutil.copyfile(ROOT / "denial/window_motion_policy.dart",
+        plugin / "src/state/win10x_window_motion.dart")
+    scene = plugin / "src/desktop/desktop_scene.dart"
+    replace_once(scene, "import 'dart:async';",
+        "import 'dart:async';\nimport '../state/win10x_window_motion.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(scene, "    super.initState();",
+        "    super.initState();\n    win10xWindowMotionEnabled.addListener(_windowMotionChanged);\n    win10xShellMode.addListener(_windowMotionChanged);\n    win10xReachability.addListener(_windowMotionChanged);")
+    replace_once(scene, "  @override\n  void dispose() {\n    _overviewDepartureTimer?.cancel();",
+        "  void _windowMotionChanged() { if (mounted) setState(() {}); }\n\n"
+        "  @override\n  void dispose() {\n    win10xWindowMotionEnabled.removeListener(_windowMotionChanged);\n    win10xShellMode.removeListener(_windowMotionChanged);\n    win10xReachability.removeListener(_windowMotionChanged);\n"
+        "    _overviewDepartureTimer?.cancel();")
+    current = scene.read_text()
+    current = current.replace("final reduceMotion = MediaQuery.disableAnimationsOf(context);",
+        "final reduceMotion = MediaQuery.disableAnimationsOf(context) || !win10xWindowMotionEnabled.value;")
+    current = current.replace("final animateMinimize = !MediaQuery.disableAnimationsOf(context);",
+        "final animateMinimize = !MediaQuery.disableAnimationsOf(context) && win10xWindowMotionEnabled.value;")
+    scene.write_text(current)
+    layers = plugin / "src/desktop/desktop_window_layers.dart"
+    replace_once(layers, "import 'package:denial_flutter_sdk/models.dart';",
+        "import 'package:denial_flutter_sdk/models.dart';\nimport '../state/win10x_window_motion.dart';")
+    replace_once(layers, "      DesktopWindowFrame(",
+        "      Win10xWindowMotion(child: DesktopWindowFrame(")
+    replace_once(layers, "        heldPets: held,\n      ),",
+        "        heldPets: held,\n      )),")
+
+    frame = plugin / "src/desktop/desktop_window_frame.dart"
+    replace_once(frame, "import 'package:flutter/material.dart';",
+        "import 'package:flutter/material.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(frame, "      rect: frame,\n      layoutRect:",
+        "      rect: frame.shift(Offset(0, MediaQuery.sizeOf(context).height * win10xReachability.value)),\n      layoutRect:")
+    # Start owns launch motion. Never stack the upstream random squircle /
+    # warmup delay over our Rust-derived handoff, including slow cold starts.
+    replace_once(frame, "            enabled: window.shouldAnimateEntrance,",
+        "            enabled: false, // Win10X owns the complete launch handoff")
+    shutil.copyfile(ROOT / "denial/client_surface_policy.dart",
+        plugin / "src/state/win10x_client_surface.dart")
+    shutil.copyfile(SHELL / "lib/src/client_geometry.dart",
+        plugin / "src/state/client_geometry.dart")
+    replace_once(frame, "import '../state/win10x_desktop_overrides.dart';",
+        "import '../state/win10x_desktop_overrides.dart';\nimport '../state/win10x_client_surface.dart';")
+    replace_once(frame, "localLayoutSize: window.isLocalFlutter\n",
+        "localLayoutSize: window.isLocalFlutter && transformed\n")
+    replace_once(frame, "fit: BoxFit.fill,", "fit: BoxFit.contain,")
+    replace_once(frame, "      DesktopVisibilityFade(child: _buildSurface(context, ref));",
+        "      DesktopVisibilityFade(child: window.isLocalFlutter ? _buildSurface(context, ref) : Win10xClientSurface(\n"
+        "        sourceSize: window.contentCoordinateRect.size, frameWidth: frameWidth, child: _buildSurface(context, ref)));" )
+    replace_once(publisher, "import '../state/win10x_desktop_overrides.dart';",
+        "import '../state/win10x_desktop_overrides.dart';\nimport '../state/win10x_client_surface.dart';")
+    replace_once(publisher, "        final visualContentRect = placement.contentRect;\n        final outputClip = outputClipFor(placement);",
+        "        final client = windowsById[placement.objectId]!;\n"
+        "        final visualContentRect = client.isLocalFlutter ? placement.contentRect : win10xClientRect(placement.contentRect, client.contentCoordinateRect.size);\n"
+        "        final outputClip = outputClipFor(placement);")
+    replace_once(publisher, "      final visualContentRect = placement.contentRect;\n      final sourceRect = window.contentCoordinateRect;",
+        "      final sourceRect = window.contentCoordinateRect;\n"
+        "      final visualContentRect = window.isLocalFlutter ? placement.contentRect : win10xClientRect(placement.contentRect, sourceRect.size);")
+    popup_layers = plugin / "src/desktop/desktop_popup_surface_layers.dart"
+    replace_once(popup_layers, "import 'desktop_pixel_alignment.dart';",
+        "import 'desktop_pixel_alignment.dart';\nimport '../state/win10x_client_surface.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    replace_once(popup_layers, "        final contentRect = drawsServerFrame",
+        "        final rawContentRect = drawsServerFrame")
+    replace_once(popup_layers, "        final retainedContentRect = drawsServerFrame",
+        "        final rawRetainedContentRect = drawsServerFrame")
+    replace_once(popup_layers, "        final duration = placement.dragging ? Duration.zero : motionDuration;",
+        "        final retainedContentRect = window.isLocalFlutter ? rawRetainedContentRect : win10xClientRect(rawRetainedContentRect, window.contentCoordinateRect.size);\n"
+        "        final layoutFrame = transformed ? placement.frame : frame;\n"
+        "        final layoutContent = transformed ? retainedContentRect : window.isLocalFlutter ? rawContentRect : win10xClientRect(rawContentRect, window.contentCoordinateRect.size);\n"
+        "        final visualFrame = win10xClientRect(frame, layoutFrame.size);\n"
+        "        final scale = layoutFrame.width > 0 ? visualFrame.width / layoutFrame.width : 1.0;\n"
+        "        final contentRect = Rect.fromLTWH(visualFrame.left + (layoutContent.left - layoutFrame.left) * scale, visualFrame.top + (layoutContent.top - layoutFrame.top) * scale, layoutContent.width * scale, layoutContent.height * scale);\n"
+        "        final duration = placement.dragging ? Duration.zero : motionDuration;")
+    replace_once(popup_layers, "rect: window.mapSurfaceRect(layer, contentRect),",
+        "rect: window.mapSurfaceRect(layer, contentRect).shift(Offset(0, MediaQuery.sizeOf(context).height * win10xReachability.value)),")
+
+    # Retained paint and inverse hit testing already share this matrix. Keep
+    # that contract while replacing independent X/Y stretch with uniform fit.
+    retained = plugin / "src/desktop/retained_animated_positioned.dart"
+    replace_once(retained, "import 'package:flutter/widgets.dart';",
+        "import 'package:flutter/widgets.dart';\nimport '../state/win10x_client_surface.dart';")
+    before = """    final scaleX = _retainedSize.width > 0
+        ? _visualRect.width / _retainedSize.width
+        : 1.0;
+    final scaleY = _retainedSize.height > 0
+        ? _visualRect.height / _retainedSize.height
+        : 1.0;
+    return Matrix4.diagonal3Values(scaleX, scaleY, 1)
+      ..setTranslationRaw(_visualRect.left, _visualRect.top, 0);"""
+    after = """    final fitted = win10xClientRect(_visualRect, _retainedSize);
+    final scale = _retainedSize.width > 0 ? fitted.width / _retainedSize.width : 1.0;
+    return Matrix4.diagonal3Values(scale, scale, 1)
+      ..setTranslationRaw(fitted.left, fitted.top, 0);"""
+    replace_once(retained, before, after)
+
+    # All reference-host chrome uses the same Win10 material as our surfaces.
+    # Keep this local to the prepared shell; do not modify the running desktop.
+    theme_host = plugin / "src/core/denial_shell.dart"
+    replace_once(theme_host, "import 'package:flutter/widgets.dart';",
+        "import 'package:flutter/widgets.dart';\nimport '../state/win10x_desktop_overrides.dart';")
+    # Hardware audio feedback must remain above the secure stage on phones.
+    # Keep one presenter only; the ordinary desktop HUD stays in scene.overlays.
+    replace_once(theme_host, "import '../state/win10x_desktop_overrides.dart';",
+        "import '../state/win10x_desktop_overrides.dart';\nimport '../widgets/system_level_hud.dart';")
+    replace_once(theme_host, "              if (!besidePhone) const SystemKeyboardLayer(),",
+        "              if (!besidePhone) const SystemKeyboardLayer(),\n              if (!besidePhone && win10xShellMode.value == 2) const SystemLevelHudLayer(),")
+    default_shell = plugin / "src/features/default_shell/default_shell_app.dart"
+    replace_once(default_shell, "import 'package:flutter/widgets.dart';",
+        "import 'package:flutter/widgets.dart';\nimport '../../state/win10x_desktop_overrides.dart';")
+    replace_once(default_shell, "desktop: const DenialShellScene(", "desktop: DenialShellScene(")
+    replace_once(default_shell, "<Widget>[SystemLevelHudLayer(), NotificationBannerLayer()],",
+        "<Widget>[if (win10xShellMode.value != 2) const SystemLevelHudLayer(), const NotificationBannerLayer()],")
+    theme_text = theme_host.read_text()
+    if "const accent = Color(0xff0078d4);" not in theme_text:
+        start = theme_text.index("    final accent = ref.watch(")
+        end = theme_text.index("    final colors =", start)
+        theme_text = theme_text[:start] + "    const accent = Color(0xff0078d4);\n    final light = win10xShellMode.value != 2;\n" + theme_text[end:]
+    theme_text = theme_text.replace("cornerRadiusScale: appearance.cornerRadiusScale,", "cornerRadiusScale: 0,")
+    theme_text = theme_text.replace("panelOpacity: appearance.panelOpacity,", "panelOpacity: 1,")
+    theme_text = theme_text.replace("cardOpacity: appearance.cardOpacity,", "cardOpacity: 1,")
+    theme_text = theme_text.replace("transparencyMode: appearance.transparencyMode,", "transparencyMode: ShellTransparencyMode.off,")
+    theme_host.write_text(theme_text)
+    # Use our legacy Rust motion math for desktop/window chrome only. Secure
+    # session animations retain upstream ownership.
+    for motion_root in (plugin / "src/state", KIT / "runtime/packages/denial_flutter_sdk/lib/src/theme"):
+        for name in ("motion_math.dart", "fluent_motion.dart"):
+            shutil.copyfile(SHELL / "lib/src" / name, motion_root / name)
+    for name in ("desktop_window_frame.dart", "desktop_scene.dart", "desktop_panel_transition.dart"):
+        path = plugin / "src/desktop" / name
+        value = path.read_text()
+        motion_import = "import '../state/fluent_motion.dart';"
+        if motion_import not in value:
+            value = motion_import + "\n" + value
+        curves = {
+            "workspaceSwitchCurve": "standard", "layoutTileReflowCurve": "standard",
+            "overviewEnterCurve": "standard", "overviewExitCurve": "accelerate",
+            "overviewReversalCurve": "standard", "md3Emphasized": "standard",
+            "md3EmphasizedDecelerate": "standard", "md3EmphasizedAccelerate": "accelerate",
+            "standard": "standard", "desktopWindowRevealCurve": "standard",
+        }
+        value = re.sub(r"\bMotion\.(" + "|".join(curves) + r")\b",
+            lambda match: "FluentMotion." + curves[match[1]], value)
+        if name == "desktop_panel_transition.dart":
+            value = value.replace("curve: Curves.linear,", "curve: FluentMotion.standard,")
+            value = value.replace("Motion.desktopPanelOpen", "FluentMotion.slower")
+            value = value.replace("Motion.desktopPanelClose", "FluentMotion.slow")
+        path.write_text(value)
+    # Managed popups are outside component themes. Give Win10X popups the
+    # same legacy easing, while leaving unrelated upstream overlays alone.
+    popup = KIT / "runtime/packages/denial_flutter_sdk/lib/src/widgets/shell_popup_host.dart"
+    value = popup.read_text()
+    value = value.replace("if (mounted && !widget.surface.closing) {",
+        "if (mounted && !widget.surface.closing && widget.surface.keyboardPolicy == ShellKeyboardPolicy.capture) {")
+    value = value.replace("if (restoreFocus != null && restoreFocus.canRequestFocus) {",
+        "if (removed.keyboardPolicy == ShellKeyboardPolicy.capture && restoreFocus != null && restoreFocus.canRequestFocus) {")
+    value = value.replace("                GestureDetector(\n                  behavior: HitTestBehavior.opaque,",
+        "                if (surface.pointerPolicy == ShellPointerPolicy.fullScene) GestureDetector(\n                  behavior: HitTestBehavior.opaque,")
+    popup_import = "import '../theme/fluent_motion.dart';"
+    if popup_import not in value:
+        value = popup_import + "\n" + value
+    value = value.replace("curve: Motion.md3EmphasizedDecelerate,",
+        "curve: widget.surface.debugLabel.startsWith('Win10X') ? FluentMotion.standard : Motion.md3EmphasizedDecelerate,")
+    value = value.replace("reverseCurve: Motion.md3EmphasizedAccelerate,",
+        "reverseCurve: widget.surface.debugLabel.startsWith('Win10X') ? FluentMotion.accelerate : Motion.md3EmphasizedAccelerate,")
+    value = value.replace("scale: _scale,",
+        "scale: surface.debugLabel.startsWith('Win10X') ? const AlwaysStoppedAnimation<double>(1) : _scale,")
+    popup.write_text(value)
+
+    (APP / "lib").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "denial/main.dart", APP / "lib/main.dart")
+    shutil.copyfile(ROOT / "denial/shell_chrome.dart", APP / "lib/shell_chrome.dart")
+    shutil.copyfile(ROOT / "denial/preview_capture.dart", APP / "lib/preview_capture.dart")
+    (APP / "pubspec.yaml").write_text(json.dumps({
+        "name": "win10x_denial_application", "publish_to": "none", "version": "0.1.0",
+        "environment": {"sdk": "^3.13.0", "flutter": "3.47.5"},
+        "dependencies": {
+            "flutter": {"sdk": "flutter"},
+            "denial_desktop": {"path": "../kit/runtime/plugins/denial_desktop"},
+            "denial_flutter_sdk": {"path": "../kit/runtime/packages/denial_flutter_sdk"},
+            "win10x_shell": {"path": "../../../flutter_shell"},
+        },
+        "flutter": {"uses-material-design": True},
+    }, indent=2) + "\n")
+    # Overrides in transitive dependency packages are deliberately ignored by Pub.
+    for root in (APP, SHELL):
+        overrides = {"dependency_overrides": {name: {
+            "path": os.path.relpath(KIT / "runtime/packages" / name, root)}
+            for name in ("denial_sdk", "denial_flutter_sdk")}}
+        (root / "pubspec_overrides.yaml").write_text(json.dumps(overrides, indent=2) + "\n")
+    for root, seed in ((SHELL, KIT / "runtime/packages/denial_flutter_sdk/pubspec.lock"),
+            (APP, ROOT / "denial/application.pubspec.lock")):
+        if not (root / "pubspec.lock").exists():
+            shutil.copyfile(seed, root / "pubspec.lock")
+    patch_marker.write_text(patch_identity)
+    print("Prepared", APP)
+
+
+def tools():
+    flutter = KIT / "flutter/bin/flutter"
+    dart = CACHE / "dart-sdk/bin/dart"
+    if not flutter.exists() or not dart.exists():
+        raise RuntimeError("Run tools/win10x-denial bootstrap first")
+    return flutter, dart
+
+
+def resolve():
+    prepare()
+    flutter, _ = tools()
+    for root in (SHELL, APP):
+        run(flutter, "pub", "get", *(["--offline"] if os.environ.get("WIN10X_DENIAL_OFFLINE") == "1" else []), cwd=root)
+
+
+def analyze():
+    resolve()
+    _, dart = tools()
+    run(dart, "format", "--output=none", "--set-exit-if-changed", "lib", "test", cwd=SHELL)
+    run(dart, "analyze", "--fatal-infos", "lib", "test", cwd=SHELL)
+    run(dart, "analyze", "--fatal-infos", "lib", cwd=APP)
+
+
+def publish_bundle(generation, current):
+    """Publish by rename, never truncate a library mapped by a live preview."""
+    temporary = current.with_name(".bundle-link-" + generation.name)
+    temporary.symlink_to(os.path.relpath(generation, current.parent), target_is_directory=True)
+    if current.exists() and not current.is_symlink():
+        # One-time migration of the older real-directory bundle. Its inodes are
+        # retained; future previews resolve the generation before launching.
+        legacy = generation.parent / ("legacy-" + generation.name)
+        current.rename(legacy)
+    os.replace(temporary, current)
+
+
+def bundle():
+    resolve()
+    flutter, _ = tools()
+    assembly = WORK / "assembly"
+    current = WORK / "bundle"
+    build_digest = source_digest()
+    metadata = current / "win10x-build.json"
+    previous = json.loads(metadata.read_text()) if metadata.exists() else {}
+    if previous.get("source_sha256") != build_digest:
+        # Flutter 3.47.5's release Linux asset target does not declare app.dill
+        # as an input. New IconData constants can compile while the old subset
+        # font stays cached. Invalidate only that asset target when source changes.
+        for stamp in (APP / ".dart_tool/flutter_build").glob("*/release_bundle_linux-x64_assets.stamp"):
+            stamp.unlink()
+    run(flutter, "assemble", "--suppress-analytics",
+        f"--resource-pool-size={max(1, (os.cpu_count() or 1) - 4)}",
+        f"--output={assembly}", "-dTargetFile=lib/main.dart", "-dBuildMode=release",
+        "-dTargetPlatform=linux-x64", "-dDartObfuscation=false",
+        "-dTrackWidgetCreation=false", "-dTreeShakeIcons=true",
+        "release_bundle_linux-x64_assets", cwd=APP)
+    if source_digest() != build_digest:
+        raise RuntimeError("Source changed during compilation; rebuild before previewing or packaging")
+    generations = WORK / "bundles"
+    generations.mkdir(exist_ok=True)
+    output = Path(tempfile.mkdtemp(prefix=build_digest[:12] + "-", dir=generations))
+    (output / "lib").mkdir(parents=True, exist_ok=True)
+    (output / "data").mkdir(exist_ok=True)
+    shutil.copy2(assembly / "lib/libapp.so", output / "lib/libapp.so")
+    engine = KIT / "engine/out/denial_host_release"
+    shutil.copy2(engine / "libflutter_engine.so", output / "lib/libflutter_engine.so")
+    shutil.copy2(engine / "icudtl.dat", output / "data/icudtl.dat")
+    assets = output / "data/flutter_assets"
+    if assets.exists():
+        shutil.rmtree(assets)
+    shutil.copytree(assembly / "flutter_assets", assets)
+    # Honest custom-bundle provenance; do not claim an official/manager candidate.
+    (output / "win10x-build.json").write_text(json.dumps({
+        "denial_revision": LOCK["revision"], "release": LOCK["release"],
+        "app_sha256": digest(output / "lib/libapp.so"),
+        "engine_sha256": digest(output / "lib/libflutter_engine.so"),
+        "source_sha256": build_digest,
+    }, indent=2) + "\n")
+    verify(output)
+    publish_bundle(output, current)
+    print("Built", current, "->", output)
+
+
+def font_codepoints(path):
+    data = path.read_bytes()
+    tables = {}
+    for index in range(struct.unpack_from(">H", data, 4)[0]):
+        tag, _, offset, _ = struct.unpack_from(">4sIII", data, 12 + index * 16)
+        tables[tag] = offset
+    cmap = tables[b"cmap"]
+    points = set()
+    for index in range(struct.unpack_from(">H", data, cmap + 2)[0]):
+        _, _, relative = struct.unpack_from(">HHI", data, cmap + 4 + index * 8)
+        base = cmap + relative
+        kind = struct.unpack_from(">H", data, base)[0]
+        if kind == 4:
+            count = struct.unpack_from(">H", data, base + 6)[0] // 2
+            ends = struct.unpack_from(">" + str(count) + "H", data, base + 14)
+            starts = struct.unpack_from(">" + str(count) + "H", data, base + 16 + count * 2)
+            for start, end in zip(starts, ends):
+                points.update(range(start, end + 1))
+        elif kind == 12:
+            count = struct.unpack_from(">I", data, base + 12)[0]
+            for group in range(count):
+                start, end, _ = struct.unpack_from(">III", data, base + 16 + group * 12)
+                points.update(range(start, end + 1))
+    return points
+
+
+def verify_shell_assets(bundle):
+    count = 0
+    for source in (SHELL / "assets").rglob("*.png"):
+        target = bundle / "data/flutter_assets/packages/win10x_shell" / source.relative_to(SHELL)
+        if not target.is_file() or digest(source) != digest(target):
+            raise RuntimeError("Missing/stale shell asset: " + str(source.relative_to(SHELL)))
+        count += 1
+    print("Verified packaged shell bitmaps:", count)
+
+
+def verify(bundle_root=None):
+    output = Path(bundle_root) if bundle_root else (WORK / "bundle").resolve()
+    metadata = json.loads((output / "win10x-build.json").read_text())
+    if metadata["source_sha256"] != source_digest():
+        raise RuntimeError("Bundle source is stale")
+    for name, expected in (("libapp.so", metadata["app_sha256"]),
+            ("libflutter_engine.so", metadata["engine_sha256"])):
+        if digest(output / "lib" / name) != expected:
+            raise RuntimeError("Bundle checksum mismatch: " + name)
+    definitions = dict(re.findall(r"static const IconData (\w+)\s*=\s*IconData\(\s*(0x[0-9a-f]+)",
+        (KIT / "flutter/packages/flutter/lib/src/material/icons.dart").read_text()))
+    used = set()
+    for path in (SHELL / "lib").rglob("*.dart"):
+        used.update(re.findall(r"\bIcons\.(\w+)", path.read_text()))
+    glyphs = font_codepoints(output / "data/flutter_assets/fonts/MaterialIcons-Regular.otf")
+    missing = [name for name in sorted(used) if name in definitions and int(definitions[name], 16) not in glyphs]
+    if missing:
+        raise RuntimeError("Release icon font is stale; missing glyphs: " + ", ".join(missing))
+    run(CACHE / "usr/lib/denial/polkit/denial-app", "--bundle", output,
+        "--engine", output / "lib/libflutter_engine.so", "--check")
+    verify_shell_assets(output)
+    print(f"Verified bundle checksums, native ABI and {len(used)} UI icon codepoints")
+
+
+def doctor():
+    print("Denial:", LOCK["release"], LOCK["revision"])
+    for name, path in (
+        ("Dart SDK", CACHE / "dart-sdk/bin/dart"),
+        ("Release kit", CACHE / "usr/lib/denial/plugin-build-kit/kit.json"),
+        ("Native compositor", CACHE / "usr/bin/deniald"),
+        ("Win10X Flutter bundle", WORK / "bundle/lib/libapp.so"),
+    ):
+        print(f'{name}: {path} [{"present" if path.exists() else "missing"}]')
+    print("denial-nested is a topology demo, not a Flutter desktop preview.")
+    print("Real-session acceptance needs a separate DRM/KMS seat or VM.")
+
+
+def stage_auth(destination, arch):
+    loader = importlib.machinery.SourceFileLoader('win10x_auth_stage', str(ROOT / 'tools/win10x-denial-polkit'))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    auth = importlib.util.module_from_spec(spec)
+    loader.exec_module(auth)
+    auth.stage(destination, arch)
+
+
+def package():
+    output = (WORK / "bundle").resolve()
+    provenance = json.loads((output / "win10x-build.json").read_text())
+    if provenance.get("source_sha256") != source_digest():
+        raise RuntimeError("Rebuild the current worktree before packaging")
+    destination = ROOT / "packaging/out/denial"
+    # Replace only our disposable staging directory, never installed files.
+    if destination.exists():
+        shutil.rmtree(destination)
+    runtime = destination / "lib/win10x-denial/runtime/usr"
+    (runtime / "bin").mkdir(parents=True)
+    (runtime / "lib/denial").mkdir(parents=True)
+    for name in ("deniald", "denialctl", "denial-portal", "denial-polkit-agent", "denial-settings"):
+        shutil.copy2(CACHE / "usr/bin" / name, runtime / "bin" / name, follow_symlinks=False)
+    for name in ("settings", "polkit"):
+        shutil.copytree(CACHE / "usr/lib/denial" / name, runtime / "lib/denial" / name, symlinks=True)
+    for name in ("denial", "denial-flutter-engine"):
+        shutil.copytree(CACHE / "usr/share/licenses" / name,
+            runtime / "share/licenses" / name)
+    shutil.copytree(output, destination / "lib/win10x-denial/shell")
+    shutil.copy2(ROOT / "LICENSE", destination / "lib/win10x-denial/LICENSE.win10x")
+    shutil.copy2(ROOT / "denial/upstream.lock.json", destination / "lib/win10x-denial/upstream.lock.json")
+    (destination / "bin").mkdir()
+    (destination / "share/wayland-sessions").mkdir(parents=True)
+    shutil.copy2(ROOT / "packaging/win10x-denial-session", destination / "bin/win10x-denial-session")
+    shutil.copy2(ROOT / "packaging/win10x-denial-polkit-agent", destination / "bin/win10x-denial-polkit-agent")
+    (destination / "libexec").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "packaging/win10x-screen-hooks", destination / "libexec/win10x-screen-hooks")
+    shutil.copy2(ROOT / "packaging/win10x-denial.desktop", destination / "share/wayland-sessions/win10x-denial.desktop")
+    stage_auth(destination, "x64")
+    print("Staged experimental session:", destination)
+    print("Nothing was installed. Review, then run packaging/install-denial-session.sh explicitly.")
+
+
+def preview(options):
+    output = (WORK / "bundle").resolve()
+    host = CACHE / "usr/lib/denial/polkit/denial-app"
+    if not (output / "lib/libapp.so").exists():
+        raise RuntimeError("Build the current worktree first: tools/win10x-denial bundle")
+    provenance = json.loads((output / "win10x-build.json").read_text())
+    if provenance.get("source_sha256") != source_digest():
+        raise RuntimeError("The preview bundle is stale; rebuild with tools/win10x-denial bundle")
+    environment = dict(os.environ)
+    environment["DENIAL_SHELL_PROFILE"] = "desktop"
+    environment["WIN10X_PREVIEW_START"] = "1" if options.start else "0"
+    environment["WIN10X_PREVIEW_PANEL"] = options.panel or ""
+    if options.capture:
+        environment["WIN10X_PREVIEW_CAPTURE"] = str(Path(options.capture).resolve())
+    # Preview has its own config, including the optional explicit demo board.
+    configuration = WORK / "preview-config"
+    environment["XDG_CONFIG_HOME"] = str(configuration)
+    environment["XDG_STATE_HOME"] = str(WORK / "preview-state")
+    if options.demo:
+        config = configuration / "win10x/flutter-shell.json"
+        if config.exists() and not options.layout:
+            print("Keeping existing isolated preview settings:", config)
+        else:
+            apps = ["Alacritty", "firefox", "org.kde.dolphin", "cursor",
+                "org.kde.konsole", "org.kde.kate", "btop", "org.kde.gwenview"]
+            settings = {
+                "version": 1, "start_layout_style": options.layout or "windows10",
+                "start_tile_animation": "windows10_mobile",
+                "app_launch_animation": "windows10_mobile",
+                "pinned_apps": apps[:3],
+                "groups": [{"id": 1, "title": "常用应用"}, {"id": 2, "title": "工具"}],
+                "tiles": [{"app_id": app, "group_id": 1 if i < 4 else 2,
+                    "col": (i % 4) * 2, "row": 0, "w": 2, "h": 2}
+                    for i, app in enumerate(apps)],
+            }
+            config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
+    elif options.layout:
+        config = configuration / "win10x/flutter-shell.json"
+        settings = json.loads(config.read_text()) if config.exists() else {"version": 1}
+        settings["start_layout_style"] = options.layout
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
+    if options.mode:
+        config = configuration / "win10x/flutter-shell.json"
+        settings = json.loads(config.read_text()) if config.exists() else {"version": 1}
+        settings["shell_mode"] = options.mode
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
+    run(host, "--bundle", output, "--engine", output / "lib/libflutter_engine.so",
+        "--app-id", "win10x-denial-preview", "--title", "Win10X Denial Preview",
+        "--width", options.width, "--height", options.height, env=environment)
+
+
+def session(options):
+    if not options.device:
+        raise RuntimeError("Choose the display GPU explicitly: --device /dev/dri/cardN")
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
+        raise RuntimeError("A graphical session is active. Run preview here; start session only after logging out to a local TTY.")
+    device = Path(options.device).resolve()
+    if not device.is_char_device():
+        raise RuntimeError(f"Not a DRM character device: {device}")
+    output = (WORK / "bundle").resolve()
+    provenance = json.loads((output / "win10x-build.json").read_text())
+    if provenance.get("source_sha256") != source_digest():
+        raise RuntimeError("The session bundle is stale; rebuild with tools/win10x-denial bundle")
+    environment = dict(os.environ)
+    environment.update({
+        "DENIAL_SHELL_PROFILE": "desktop", "XDG_SESSION_TYPE": "wayland",
+        "XDG_CURRENT_DESKTOP": "Win10X:Denial", "XDG_SESSION_DESKTOP": "Win10X",
+        "DENIAL_SETTINGS_BINARY": str(CACHE / "usr/bin/denial-settings"),
+        "DENIAL_CONTROL_TOOL": str(CACHE / "usr/bin/denialctl"),
+        "DENIAL_COMPOSITOR_BINARY": str(CACHE / "usr/bin/deniald"),
+        "PATH": str(CACHE / "usr/bin") + os.pathsep + environment.get("PATH", ""),
+    })
+    # Native defaults/outputs are configured by Denial; no host display-manager
+    # files, user-session targets or unrelated processes are changed here.
+    run(CACHE / "usr/bin/deniald", "--device", device, "--wayland",
+        "--flutter-bundle", output, "--no-polkit-agent", env=environment)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=[
+        "bootstrap", "prepare", "resolve", "analyze", "test", "bundle", "doctor", "preview", "session", "package", "verify"])
+    parser.add_argument("--mode", choices=["tablet", "desktop", "phone"], help="select an independent shell mode in isolated preview settings")
+    parser.add_argument("--start", action="store_true", help="open Start on preview startup")
+    parser.add_argument("--panel", choices=["action-center", "task-view"], help="open a panel on preview startup")
+    parser.add_argument("--capture", help="one-shot self-capture of this preview UI after it settles")
+    parser.add_argument("--demo", action="store_true", help="seed an isolated preview board")
+    parser.add_argument("--layout", choices=["windows10", "windows_phone", "windows8"])
+    parser.add_argument("--width", type=int, default=1100)
+    parser.add_argument("--height", type=int, default=760)
+    parser.add_argument("--device", help="DRM/KMS display device for a manual TTY test session")
+    options = parser.parse_args()
+    command = options.command
+    if command == "test":
+        resolve()
+        _, dart = tools()
+        run(dart, "test", cwd=SHELL)
+    elif command == "preview":
+        preview(options)
+    elif command == "session":
+        session(options)
+    else:
+        globals()[command]()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))
+

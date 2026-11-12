@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Build the pinned ARM64 shell using an ARM64 SSH host for AOT generation."""
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+loader = importlib.machinery.SourceFileLoader("win10x_denial", str(ROOT / "tools/win10x-denial"))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+base = importlib.util.module_from_spec(spec)
+loader.exec_module(base)
+LOCK = json.loads((ROOT / "denial/arm64.lock.json").read_text())
+WORK = ROOT / "target/denial-arm64"
+RUNTIME = WORK / "runtime"
+ARM_KIT = RUNTIME / "usr/lib/denial/plugin-build-kit"
+
+
+def using_qemu():
+    """Local aarch64 AOT via qemu-user-static when Cerro/SSH is unavailable."""
+    host = os.environ.get("WIN10X_ARM64_HOST", "").strip().lower()
+    return host in ("qemu", "local", "qemu-user")
+
+
+def connection():
+    host = os.environ.get("WIN10X_ARM64_HOST")
+    if not host:
+        raise RuntimeError(
+            "Set WIN10X_ARM64_HOST to an authenticated ARM64 SSH host, "
+            "or to 'qemu' for local qemu-user-static AOT"
+        )
+    if using_qemu():
+        raise RuntimeError("SSH helpers are not used in qemu mode")
+    return host, shlex.split(os.environ.get("WIN10X_ARM64_SSH_OPTIONS", "-oBatchMode=yes"))
+
+
+def qemu_root():
+    return Path(os.environ.get("WIN10X_ARM64_QEMU_ROOT", "/usr/aarch64-linux-gnu"))
+
+
+def qemu_bin():
+    return Path(os.environ.get("WIN10X_ARM64_QEMU", "/usr/bin/qemu-aarch64-static"))
+
+
+def ssh(command, capture=False):
+    host, options = connection()
+    return subprocess.run(["ssh", *options, host, command], check=True,
+                          text=True, capture_output=capture)
+
+
+def scp(source, destination):
+    _, options = connection()
+    subprocess.run(["scp", "-q", *options, str(source), str(destination)], check=True)
+
+
+def bootstrap():
+    if LOCK["revision"] != base.LOCK["revision"]:
+        raise RuntimeError("ARM64 lock and shell lock disagree")
+    downloads = WORK / "downloads"
+    for package in LOCK["packages"]:
+        archive = downloads / package["file"]
+        base.download("https://packages.denialwm.org/arch/aarch64/" + package["file"],
+                      archive, package["sha256"])
+        marker = downloads / (package["file"] + ".extracted")
+        if not marker.exists() or marker.read_text().strip() != package["sha256"]:
+            RUNTIME.mkdir(parents=True, exist_ok=True)
+            base.run("tar", "-xf", archive, "-C", RUNTIME)
+            marker.write_text(package["sha256"] + "\n")
+    manifest = json.loads((ARM_KIT / "kit.json").read_text())
+    if manifest["identity"]["source_revision"] != LOCK["revision"]:
+        raise RuntimeError("Wrong ARM64 compiler kit")
+    for relative, expected in manifest["files"].items():
+        if base.digest(ARM_KIT / relative) != expected:
+            raise RuntimeError("Changed ARM64 compiler input: " + relative)
+    return manifest
+
+
+def snapshot(arguments):
+    """Called by Flutter. Runs native aarch64 gen_snapshot (SSH or qemu-user)."""
+    if using_qemu():
+        compiler = Path(os.environ["WIN10X_ARM64_COMPILER"])
+        if not qemu_bin().is_file():
+            raise RuntimeError("Missing " + str(qemu_bin()))
+        if not (qemu_root() / "lib/ld-linux-aarch64.so.1").is_file():
+            raise RuntimeError(
+                "Missing aarch64 dynamic linker under " + str(qemu_root())
+            )
+        env = os.environ.copy()
+        env["QEMU_LD_PREFIX"] = str(qemu_root())
+        subprocess.run(
+            [str(qemu_bin()), "-L", str(qemu_root()), str(compiler), *arguments],
+            check=True,
+            env=env,
+        )
+        return
+    host, _ = connection()
+    directory = ssh("mktemp -d /tmp/win10x-aot.XXXXXXXX", capture=True).stdout.strip()
+    outputs = []
+    rewritten = []
+    try:
+        for argument in arguments:
+            if argument.startswith(("--elf=", "--save-debugging-info=")):
+                option, local = argument.split("=", 1)
+                remote = directory + "/" + Path(local).name
+                outputs.append((remote, Path(local)))
+                rewritten.append(option + "=" + remote)
+            elif not argument.startswith("-") and Path(argument).is_file():
+                remote = directory + "/" + Path(argument).name
+                scp(argument, host + ":" + remote)
+                rewritten.append(remote)
+            else:
+                rewritten.append(argument)
+        compiler = os.environ["WIN10X_ARM64_COMPILER"]
+        ssh(shlex.join([compiler, *rewritten]))
+        for remote, local in outputs:
+            local.parent.mkdir(parents=True, exist_ok=True)
+            scp(host + ":" + remote, local)
+    finally:
+        ssh("rm -rf -- " + shlex.quote(directory))
+
+
+def build():
+    manifest = bootstrap()
+    base.resolve()
+    engine = ARM_KIT / "engine/out" / manifest["engineTarget"]
+    expected = manifest["files"]["engine/out/" + manifest["engineTarget"] + "/gen_snapshot"]
+    if base.digest(engine / "gen_snapshot") != expected:
+        raise RuntimeError("Local ARM64 gen_snapshot checksum mismatch")
+    if using_qemu():
+        os.environ["WIN10X_ARM64_COMPILER"] = str(engine / "gen_snapshot")
+        print("Using local qemu-user-static AOT:", qemu_bin(), "root", qemu_root())
+    else:
+        host, _ = connection()
+        if ssh("uname -m", capture=True).stdout.strip() != "aarch64":
+            raise RuntimeError("The AOT compiler host must run ARM64 Linux")
+        remote_home = ssh("printf '%s' \"$HOME\"", capture=True).stdout
+        compiler = remote_home + "/.cache/win10x-denial/0.6.2-arm64/gen_snapshot"
+        os.environ["WIN10X_ARM64_COMPILER"] = compiler
+        ssh("mkdir -p " + shlex.quote(str(Path(compiler).parent)))
+        scp(engine / "gen_snapshot", host + ":" + compiler)
+        if ssh("sha256sum " + shlex.quote(compiler), capture=True).stdout.split()[0] != expected:
+            raise RuntimeError("Remote AOT compiler checksum mismatch")
+    view = WORK / "engine"
+    target = view / "out" / manifest["engineTarget"]
+    target.mkdir(parents=True, exist_ok=True)
+    host_engine = base.KIT / "engine/out/denial_host_release"
+    links = {view / "flutter": base.KIT / "engine/flutter",
+             view / "out/denial_host_release": host_engine}
+    for path in engine.iterdir():
+        if path.name == "gen_snapshot":
+            continue
+        source = host_engine / path.name if path.name in ("font-subset", "impellerc") else path
+        if path.name == "libflutter_engine.so":
+            source = RUNTIME / "usr/lib/denial/flutter/lib/libflutter_engine.so"
+        links[target / path.name] = source
+    for destination, source in links.items():
+        if destination.is_symlink():
+            destination.unlink()
+        if not destination.exists():
+            destination.symlink_to(source)
+    wrapper = target / "gen_snapshot"
+    wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " " +
+                       shlex.quote(str(Path(__file__).resolve())) + ' snapshot "$@"\n')
+    wrapper.chmod(0o755)
+    dart = base.CACHE / "dart-sdk/bin/dart"
+    flutter = base.KIT / "flutter"
+    assembly = WORK / "assembly"
+    before = base.source_digest()
+    # This target omits app.dill from its declared inputs. A current AOT image
+    # can otherwise ship an old icon subset. Invalidate only ARM64 assets,
+    # retaining the expensive native AOT cache and every published generation.
+    for stamp in (base.APP / ".dart_tool/flutter_build").glob("*/release_bundle_linux-arm64_assets.stamp"):
+        stamp.unlink()
+    assets = assembly / "flutter_assets"
+    if assets.exists():
+        shutil.rmtree(assets)
+    base.run(dart, "--packages=" + str(flutter / "packages/flutter_tools/.dart_tool/package_config.json"),
+             flutter / "bin/cache/flutter_tools.snapshot",
+             "--local-engine-src-path=" + str(view),
+             "--local-engine=" + manifest["engineTarget"],
+             "--local-engine-host=denial_host_release", "assemble", "--suppress-analytics",
+             "--resource-pool-size=12", "--output=" + str(assembly),
+             "-dTargetFile=lib/main.dart", "-dBuildMode=release", "-dTargetPlatform=linux-arm64",
+             "-dDartObfuscation=false", "-dTrackWidgetCreation=false", "-dTreeShakeIcons=true",
+             "release_bundle_linux-arm64_assets", cwd=base.APP)
+    if before != base.source_digest():
+        raise RuntimeError("Shell changed during ARM64 compilation")
+    generations = WORK / "bundles"
+    generations.mkdir(exist_ok=True)
+    output = Path(tempfile.mkdtemp(prefix=before[:12] + "-", dir=generations))
+    output.chmod(0o755)
+    (output / "lib").mkdir()
+    (output / "data").mkdir()
+    shutil.copy2(assembly / "lib/libapp.so", output / "lib/libapp.so")
+    shutil.copy2(RUNTIME / "usr/lib/denial/flutter/lib/libflutter_engine.so", output / "lib/libflutter_engine.so")
+    shutil.copy2(engine / "icudtl.dat", output / "data/icudtl.dat")
+    shutil.copytree(assembly / "flutter_assets", output / "data/flutter_assets")
+    metadata = {"release": LOCK["release"], "denial_revision": LOCK["revision"],
+                "target": "linux-arm64", "source_sha256": before,
+                "arm64_builder_sha256": base.digest(Path(__file__).resolve()),
+                "compiler_sha256": expected,
+                "app_sha256": base.digest(output / "lib/libapp.so"),
+                "engine_sha256": base.digest(output / "lib/libflutter_engine.so")}
+    (output / "win10x-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    verify_icons(output)
+    base.publish_bundle(output, WORK / "bundle")
+    print("Built ARM64 bundle:", output)
+
+
+def verify_icons(bundle):
+    base.verify_shell_assets(bundle)
+    definitions = dict(re.findall(r"static const IconData (\w+)\s*=\s*IconData\(\s*(0x[0-9a-f]+)",
+        (base.KIT / "flutter/packages/flutter/lib/src/material/icons.dart").read_text()))
+    used = set()
+    for path in (base.SHELL / "lib").rglob("*.dart"):
+        used.update(re.findall(r"\bIcons\.(\w+)", path.read_text()))
+    glyphs = base.font_codepoints(bundle / "data/flutter_assets/fonts/MaterialIcons-Regular.otf")
+    missing = [name for name in sorted(used) if name in definitions and int(definitions[name], 16) not in glyphs]
+    if missing:
+        raise RuntimeError("ARM64 icon font is stale; missing glyphs: " + ", ".join(missing))
+    print("Verified ARM64 UI icon coverage:", len(used))
+
+
+def package():
+    bundle = (WORK / "bundle").resolve()
+    metadata = json.loads((bundle / "win10x-build.json").read_text())
+    if metadata["source_sha256"] != base.source_digest():
+        raise RuntimeError("Rebuild the current shell before packaging")
+    verify_icons(bundle)
+    for name, checksum in (("libapp.so", metadata["app_sha256"]),
+                           ("libflutter_engine.so", metadata["engine_sha256"])):
+        path = bundle / "lib" / name
+        if base.digest(path) != checksum or path.read_bytes()[18:20] != b"\xb7\x00":
+            raise RuntimeError("Changed or non-ARM64 bundle: " + name)
+    destination = ROOT / "packaging/out/denial-arm64"
+    if destination.exists():
+        shutil.rmtree(destination)
+    runtime = destination / "lib/win10x-denial/runtime/usr"
+    (runtime / "bin").mkdir(parents=True)
+    for name in ("deniald", "denialctl", "denial-portal", "denial-polkit-agent", "denial-settings"):
+        shutil.copy2(RUNTIME / "usr/bin" / name, runtime / "bin" / name)
+    for name in ("settings", "polkit"):
+        shutil.copytree(RUNTIME / "usr/lib/denial" / name, runtime / "lib/denial" / name)
+    for name in ("denial", "denial-flutter-engine"):
+        shutil.copytree(RUNTIME / "usr/share/licenses" / name, runtime / "share/licenses" / name)
+    shutil.copytree(bundle, destination / "lib/win10x-denial/shell")
+    (destination / "lib/win10x-denial/shell").chmod(0o755)
+    for source in (ROOT / "LICENSE", ROOT / "denial/arm64.lock.json", ROOT / "denial/upstream.lock.json"):
+        shutil.copy2(source, destination / "lib/win10x-denial" / source.name)
+    (destination / "bin").mkdir()
+    (destination / "share/wayland-sessions").mkdir(parents=True)
+    shutil.copy2(ROOT / "packaging/win10x-denial-session", destination / "bin/win10x-denial-session")
+    shutil.copy2(ROOT / "packaging/win10x-denial-polkit-agent", destination / "bin/win10x-denial-polkit-agent")
+    (destination / "libexec").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "packaging/win10x-screen-hooks", destination / "libexec/win10x-screen-hooks")
+    shutil.copy2(ROOT / "packaging/win10x-denial.desktop", destination / "share/wayland-sessions/win10x-denial.desktop")
+    base.stage_auth(destination, "arm64")
+    print("Staged ARM64 session:", destination)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "snapshot":
+        snapshot(sys.argv[2:])
+    else:
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("command", choices=["bootstrap", "bundle", "package"])
+        options = parser.parse_args()
+        {"bootstrap": bootstrap, "bundle": build, "package": package}[options.command]()

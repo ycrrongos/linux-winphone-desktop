@@ -1,0 +1,15 @@
+/target/
+/packaging/out/
+**/*.rs.bk
+.idea/
+.vscode/
+*.qcow2
+.DS_Store
+.qoder/session-context-backup.md
+__pycache__/
+
+# Local SDK resolution and application state
+**/.dart_tool/
+**/build/
+**/pubspec_overrides.yaml
+.hmcl/

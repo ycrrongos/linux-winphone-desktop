@@ -1,0 +1,11 @@
+{
+  "release": "0.6.2",
+  "revision": "3f08a93ec42b9851ebdd73039def1ff12a639858",
+  "signing_fingerprint": "AE4108FA5E91E26BE0EE331E0F5B3AD16E023091",
+  "checksum_source": "https://github.com/denialwm/denial/releases/download/v0.6.2/SHA256SUMS",
+  "packages": [
+    {"file": "denial-0.6.2-1-aarch64.pkg.tar.zst", "sha256": "7dc3dd3c5a417a2804d5a0235044000a06863b5733b963b5c5c90da2c6d87206"},
+    {"file": "denial-flutter-engine-1:0.6.2-1-aarch64.pkg.tar.zst", "sha256": "b3093d6f867be79376a7400c538c80173436240e10acefabb65bb8306a6c0576"},
+    {"file": "denial-plugin-manager-0.6.2-1-aarch64.pkg.tar.zst", "sha256": "3db21dcd047281f3f6148d3dbe6d1141abbf5843eb94bb45e420568b8d834e1f"}
+  ]
+}

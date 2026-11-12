@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+WIN10X_AUTH_BIN="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WIN10X_AUTH_ROOT="${WIN10X_DENIAL_ROOT:-$WIN10X_AUTH_BIN/../lib/win10x-denial}"
+WIN10X_AUTH_BUNDLE="${WIN10X_DENIAL_AUTH_BUNDLE:-$WIN10X_AUTH_ROOT/runtime/usr/lib/denial/polkit}"
+export DENIAL_POLKIT_AGENT=1
+exec "$WIN10X_AUTH_ROOT/runtime/usr/bin/denial-polkit-agent" \
+  --runner "$WIN10X_AUTH_ROOT/runtime/usr/lib/denial/polkit/denial-app" \
+  --bundle "$WIN10X_AUTH_BUNDLE" \
+  --engine "$WIN10X_AUTH_BUNDLE/lib/libflutter_engine.so" "$@"

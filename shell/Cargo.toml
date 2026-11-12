@@ -1,0 +1,28 @@
+[package]
+name = "win10x-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Win10X-style touch shell UI (Fluent 1 skin on fluent-egui Fluent 2)"
+
+[[bin]]
+name = "win10x-shell"
+path = "src/main.rs"
+
+[dependencies]
+win10x-protocol = { workspace = true }
+# Vendored Fluent 2 base; rectangular radii forced to 0 for Fluent 1 / Win10 look.
+fluent-egui = { path = "../third_party/fluent-egui", default-features = true }
+eframe = { version = "0.35", default-features = false, features = ["glow", "x11", "wayland", "accesskit", "default_fonts"] }
+egui = "0.35"
+serde = { workspace = true }
+serde_json = "1"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+color-thief = "0.2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+resvg = "0.42"
+usvg = "0.42"
+tiny-skia = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rfd = "0.15"

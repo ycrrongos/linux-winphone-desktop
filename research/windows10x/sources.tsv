@@ -1,0 +1,10 @@
+id	publisher	date	title	topics	url	local_snapshot
+S04	Microsoft Windows Experience Blog	2020-05-04	Accelerating innovation in Windows 10 to meet customers where they are	单屏方向;产品演变	https://blogs.windows.com/windowsexperience/2020/05/04/accelerating-innovation-in-windows-10-to-meet-customers-where-they-are/	未能直接下载，摘要见 notes/ui-and-interaction.md
+S05	Windows Central	2020-02-25	A closer look at Microsoft's new Start menu and taskbar on Windows 10X	Launcher;搜索;最近文件;任务栏;动画	https://www.windowscentral.com/windows-10x-start-taskbar-closer-look	pages/windowscentral-start-taskbar.html
+S06	Windows Central	2020-02-27	A closer look at Microsoft's new Action Center on Windows 10X	通知;快速设置;媒体控制;电源;用户菜单	https://www.windowscentral.com/windows-10x-action-center-closer-look	pages/windowscentral-action-center.html
+S07	Windows Central	2020-03-10	This is Microsoft's new modern File Explorer for Windows 10X	文件管理;OneDrive;触控 UI;深浅色	https://www.windowscentral.com/microsofts-new-modern-file-explorer-windows-10x	pages/windowscentral-file-explorer.html
+S08	Windows Central	2020-02	Windows 10X features a beautiful new setup experience	OOBE;软键盘;语言;快速设置	https://www.windowscentral.com/windows-10x-features-beautiful-new-setup-experience	pages/windowscentral-oobe.html
+S09	Windows Central	2021-05-27	Windows 10X: Everything you need to know	总览;单屏版本;任务栏;窗口;取消发布	https://www.windowscentral.com/windows-10x	pages/windowscentral-overview.html
+S11	Pureinfotech	2021-01-21	Windows 10X: hands-on walkthrough video	单屏泄漏版;OOBE;动画;多任务;设置	https://pureinfotech.com/windows-10x-hands-on-walkthrough-video/	pages/pureinfotech-single-screen-walkthrough.html
+S12	Microsoft Learn	current snapshot 2026-08-12	Touch interactions	触控目标;间距;软键盘;横竖屏	https://learn.microsoft.com/en-us/windows/apps/develop/input/touch-interactions	pages/microsoft-learn-touch-interactions.html
+S13	Microsoft Learn	current snapshot 2026-08-12	Screen sizes and breakpoints for responsive design	响应式;断点;窗口宽度	https://learn.microsoft.com/en-us/windows/apps/design/layout/screen-sizes-and-breakpoints-for-responsive-design	pages/microsoft-learn-responsive-breakpoints.html

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/denialwm/denial.git",
+  "revision": "3f08a93ec42b9851ebdd73039def1ff12a639858",
+  "release": "0.6.2",
+  "flutter": "3.47.5",
+  "dart": "3.13.4",
+  "dart_sdk_sha256": "6487a10df5eab890d746d14a55f4c70bec3c1c0633f51804eb504cbc0fc395bb",
+  "packages": {
+    "linux-x64": [
+      {
+        "file": "denial-0.6.2-1-x86_64.pkg.tar.zst",
+        "sha256": "73ffebae5073358e1f851a10e58704fd3f0ae8f17770246d8f585d12d55576cf"
+      },
+      {
+        "file": "denial-flutter-engine-1:0.6.2-1-x86_64.pkg.tar.zst",
+        "sha256": "9aa5c04b4614583c6c4c9740505bb34474c4ef404f5a3cdd55e59517071bd656"
+      },
+      {
+        "file": "denial-plugin-manager-0.6.2-1-x86_64.pkg.tar.zst",
+        "sha256": "612d0ba8844a16622bca4928b9fb8eaf7c854665bbd0ef2a8a7cd7b2ec7ad571"
+      }
+    ]
+  }
+}

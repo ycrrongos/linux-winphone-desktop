@@ -1,0 +1,5 @@
+# Keep GitHub language stats focused on project source.
+third_party/** linguist-vendored
+research/** linguist-documentation
+*.ttf linguist-vendored
+*.json linguist-vendored

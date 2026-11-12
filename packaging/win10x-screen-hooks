@@ -1,0 +1,57 @@
+#!/usr/bin/python3
+"""Root-owned, exact-command screen hook authorization; no arbitrary sudo shell."""
+import json, os, pathlib, pwd, stat, subprocess, sys, tempfile
+ROOT = pathlib.Path('/etc/win10x/screen-hooks')
+SELF = '/usr/local/libexec/win10x-screen-hooks'
+SUDOERS = pathlib.Path('/etc/sudoers.d')
+def atomic(path, text, mode):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix='.screen-hooks-')
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w') as stream: stream.write(text)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name): os.unlink(name)
+def main():
+    if os.geteuid() != 0: raise SystemExit('Administrator authorization required')
+    action = sys.argv[1] if len(sys.argv)>1 else ''
+    uid = int(os.environ.get('PKEXEC_UID', os.environ.get('SUDO_UID', '-1')))
+    if uid <= 0: raise SystemExit('A non-root requesting user is required')
+    account = pwd.getpwuid(uid)
+    if action == 'install' and len(sys.argv)==3:
+        # Read the authorized user-owned regular config through O_NOFOLLOW. Save a
+        # root-owned snapshot, so a later user file edit cannot change approved code.
+        fd=os.open(sys.argv[2],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd) as stream:
+            st=os.fstat(stream.fileno())
+            if st.st_uid!=uid or not stat.S_ISREG(st.st_mode) or st.st_size>1048576:
+                raise SystemExit('Invalid configuration ownership/type/size')
+            config=json.load(stream)
+        commands={key:config.get('screen_'+key+'_command','') for key in ('off','on')}
+        if not all(isinstance(x,str) and len(x)<=16384 and '\0' not in x for x in commands.values()):raise SystemExit('Invalid commands')
+        rule=f'{account.pw_name} ALL=(root) NOPASSWD: {SELF} off, {SELF} on\n'
+        # Validate before either published authorization file changes.
+        with tempfile.NamedTemporaryFile(mode='w') as candidate:
+            candidate.write(rule);candidate.flush()
+            subprocess.run(['/usr/sbin/visudo','-cf',candidate.name],check=True,stdout=subprocess.DEVNULL)
+        atomic(ROOT/f'{uid}.json',json.dumps({'config':str(pathlib.Path(sys.argv[2]).absolute()),'commands':commands})+'\n',0o600)
+        atomic(SUDOERS/f'win10x-screen-{uid}',rule,0o440)
+        print('Current screen commands authorized')
+    elif action in ('off','on') and len(sys.argv)==2:
+        saved=json.loads((ROOT/f'{uid}.json').read_text())
+        fd=os.open(saved['config'],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd) as stream:
+            st=os.fstat(stream.fileno())
+            if st.st_uid!=uid or not stat.S_ISREG(st.st_mode) or st.st_size>1048576:raise SystemExit('Invalid config')
+            current=json.load(stream)
+        if not current.get('screen_hooks_root') or any(current.get('screen_'+k+'_command','')!=v for k,v in saved['commands'].items()):
+            raise SystemExit('Commands changed or administrator hooks disabled; authorize again')
+        command=saved['commands'][action]
+        if command:
+            # sudo inside an already authorized root command needs no prompt.
+            result=subprocess.run(['/bin/sh','-c',command],env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','HOME':'/root','USER':'root','LOGNAME':'root'},cwd='/',timeout=15)
+            raise SystemExit(result.returncode)
+    else: raise SystemExit('Usage: win10x-screen-hooks install CONFIG | off | on')
+
+if __name__ == '__main__': main()

@@ -1,0 +1,6 @@
+id	publisher	date	title	topics	url	local_snapshot
+D01	Microsoft Windows Experience Blog	2019-10-02	Introducing Windows 10X: enabling dual-screen PCs in 2020	产品定位;双屏;姿态;输入	https://blogs.windows.com/windowsexperience/2019/10/02/introducing-windows-10x-enabling-dual-screen-pcs-in-2020/	摘要见 notes/ui-and-interaction.md
+D02	Microsoft Windows Developer Blog	2020-01-22	Announcing dual-screen preview SDKs and Microsoft 365 Developer Day	模拟器;跨屏;姿态;应用模式	https://blogs.windows.com/windowsdeveloper/2020/01/22/announcing-dual-screen-preview-sdks-and-microsoft-365-developer-day/	摘要见 notes/ui-and-interaction.md
+D03	Microsoft Windows Developer Blog	2020-02-11	Microsoft 365 Developer Day: Dual-screen experiences	Wonder Bar;跨屏;应用模式;拖放	https://blogs.windows.com/windowsdeveloper/2020/02/11/microsoft-365-developer-day-dual-screen-experiences/	摘要见 notes/ui-and-interaction.md
+D04	PCWorld	2020-02-12	Hands on with Windows 10X: Microsoft's dual-screen OS is shallow but slick	模拟器;双屏操作;启动器;窗口跨屏	https://www.pcworld.com/article/398766/hands-on-with-windows-10x-microsofts-dual-screen-os-is-shallow-but-slick.html	pages/pcworld-emulator-hands-on.html
+D05	Microsoft Surface Duo Blog	2022-10	Designing for foldable and large screens	姿态;可达性;五种双屏应用模式	https://devblogs.microsoft.com/surface-duo/design-foldable-large-screens/	pages/microsoft-surface-duo-foldable-design-patterns.html

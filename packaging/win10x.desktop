@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Win10X
+Comment=Win10X-style touch desktop (win10x-comp)
+Exec=win10x-comp
+TryExec=win10x-comp
+Type=Application
+DesktopNames=Win10X

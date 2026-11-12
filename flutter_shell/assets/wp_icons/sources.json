@@ -1,0 +1,362 @@
+{
+  "pack": "/data/OpenMIUI/马克笔UI/包含扁平图标-WP桌面终极版  工作目录资源包",
+  "apk_sha256": "52f7f5c781154fe082341a0e8aca150048268fe73ea84d64c3eab59386561b6f",
+  "files": {
+    "ui/wifi.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_wifi.png",
+      "sha256": "ccb85b879a95d12a0e0dd21dd166a264bdcba798190e75a902510ecc3174ca99"
+    },
+    "ui/wifi_off.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_notification_wifi_off.png",
+      "sha256": "bf27ad44f81d5a2017bff4704f3b6d325d3d127f27998f01e6ca5fe6cd5d06a7"
+    },
+    "ui/bluetooth.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_bluetooth.png",
+      "sha256": "4c3d1c3b288e69d47617d52b546784888d48ce432f11252c57dcc6210ff1cfa5"
+    },
+    "ui/brightness.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_brightness.png",
+      "sha256": "62ac745865aaaed56377a7d8fee85ba8b48edc4e60bfe85fa67876a77700aeb4"
+    },
+    "ui/volume.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_ring.png",
+      "sha256": "c2d54bfb606ffe46118c815e1a2b99aa1a0d503bbb50a6bd24d6e3b0f308a998"
+    },
+    "ui/mute.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_mute_w.png",
+      "sha256": "a1011ecb92ba77cd7698d46e66e74256329c00cca8475e538627994461d9032a"
+    },
+    "ui/settings.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_settings.png",
+      "sha256": "77984a5af4d3fdfd8151dde52f53c8486ee7eb238c7ad93c367cfe120a053074"
+    },
+    "ui/lock.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_security.png",
+      "sha256": "c562f1fbc043d2d2769b90ee34dabfb16ede09c401a2df31030ec3e1b8a1b310"
+    },
+    "ui/rotate.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_rotate_screen.png",
+      "sha256": "54d31b8deed6f674f7d373d1154fc80486fda3b2952b3b6645b989426ba4c8ce"
+    },
+    "ui/airplane.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_airplane.png",
+      "sha256": "09d2357e640f3cd7b4ee700f357d709c14902eea080ff491c9fec575886b154f"
+    },
+    "ui/data.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_data.png",
+      "sha256": "61fc05fcb057fd2175a240cd63da64796590b5d397964816bdf8d1a17085f1d5"
+    },
+    "ui/hotspot.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_wifi_hotspot.png",
+      "sha256": "4846e3ae125d9b81bac5ce6b710dcf1ab85548d8edae3044d21dc8bcff5e90f3"
+    },
+    "ui/gps.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_gps.png",
+      "sha256": "8edb2b7a436b89a197e639f342de408a5b0c9dcd2e3afb681f16a991beacba9b"
+    },
+    "ui/flashlight.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_light_on.png",
+      "sha256": "34718ebeab181963978f847e0316dbe50fcf9371854833e5ef4dd196471ebfaa"
+    },
+    "ui/check.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_ok_w.png",
+      "sha256": "d4e82287fbdbd504c978ed5c73463caaf359df4f174eb42b8acfad7d0e2a589c"
+    },
+    "ui/close.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_clear.png",
+      "sha256": "e8a4b5a66e73260f73783d265413400333760935ce56a1e180edef29e85d70c2"
+    },
+    "ui/more.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/more_btn_w.png",
+      "sha256": "d60fd210487254020735b857e4d891c4eaf3feef6cfaca55b39f3c3c3ca172e9"
+    },
+    "ui/expand.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_expand_more.png",
+      "sha256": "2009d313a40f44c59acf357a4525255971001eed80e20361beb6361fc63e71f2"
+    },
+    "ui/collapse.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_expand_less.png",
+      "sha256": "181404a267bdde80b3063e47795348b841321bb13f2c86d25457aa8a1a0edf7f"
+    },
+    "ui/chevron.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_chevron_right.png",
+      "sha256": "885cce0ffa40b42d5acac7e1f27a1a285c32a65e7e522a3613aff0064a29a900"
+    },
+    "ui/refresh.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_search_refresh.png",
+      "sha256": "f09bc3a1603ea2ccf04a2890d7ef950ec35fec578c42e39539d76aaeab12454e"
+    },
+    "ui/edit.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_edit_pen.png",
+      "sha256": "ecc202713278109012f6efe16ff1511d9c5bffd9fde4717eba9117799dbfbf14"
+    },
+    "ui/apps.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_cell_app.png",
+      "sha256": "7a38f712ddcc7c5a64c253f3807040b3c4931b70ba19f098088b38d23c8012e9"
+    },
+    "ui/notifications.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_uc_message.png",
+      "sha256": "ef892b422902f2544acd9cbb5eed7c3efb34bb85d269d0902ca0be66fa7a6547"
+    },
+    "ui/file.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_trans_file.png",
+      "sha256": "8eac6d025f13152fdfbd2dae71d7ab0ffd949920c0cc9c9f05b165997e2b3463"
+    },
+    "ui/play.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_ringtone_play.png",
+      "sha256": "0f4989e285fdbefaaade83b5aea8111a160d85d3aa234395b3e425b787d14bc8"
+    },
+    "ui/theme.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_edit_pen.png",
+      "sha256": "ecc202713278109012f6efe16ff1511d9c5bffd9fde4717eba9117799dbfbf14"
+    },
+    "ui/performance.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_toolbox_application_manager.png",
+      "sha256": "14cf5ed973beb9ef3f07f91df251b3411a68cd0831b029263d7303ad07eb5975"
+    },
+    "ui/delete.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/ic_download_delete_w.png",
+      "sha256": "5892b2e7f68a95c59a54346761679c98dc5b8bbdb6d91efe48fef9086c40cea6"
+    },
+    "ui/folder.png": {
+      "source": "LauncherWP8/icon/0/filemanager8.png",
+      "sha256": "c6a9ecad595ca343b63e657e340a0f3bcf05acb91747b6ff1b921b51249eb3b9"
+    },
+    "ui/battery.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_17_w.png",
+      "sha256": "392941e86be80f56fa485a8cb14c35f7c6f338d39bce44cc7bc436139e95277a"
+    },
+    "ui/charging.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_charging_w.png",
+      "sha256": "663f01e6b133a22742583a2b4a1f812fdb3be33570102154ed62e226d30fc991"
+    },
+    "ui/signal.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_5_w.png",
+      "sha256": "9b0d4a937c601b560f6762fbc7526a9e2e6ea0473d96b365bb9052e0c0c3a670"
+    },
+    "ui/no_signal.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_0_w.png",
+      "sha256": "9b0d4a937c601b560f6762fbc7526a9e2e6ea0473d96b365bb9052e0c0c3a670"
+    },
+    "ui/status_wifi.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_wifi_4_w.png",
+      "sha256": "badeb396b2c4ac07a6d1d7507b21192caf040124d03d4f90fcf394e060ef5102"
+    },
+    "ui/status_bluetooth.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_bluetooth_w.png",
+      "sha256": "53855263126bfecb49ed2be39f332957fb22a2144c4553da8a3caf04c71f61e2"
+    },
+    "ui/battery_0.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_0_w.png",
+      "sha256": "12f8a141403b7a8f637354be0129150d5944fbe8c5b039b5f28779459b45676a"
+    },
+    "ui/battery_1.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_1_w.png",
+      "sha256": "cc4c27fb9e0b3207bb0cb05d6626d976160f0fc5c11d5ee9352b94d351840c24"
+    },
+    "ui/battery_2.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_2_w.png",
+      "sha256": "b4d3525cc36ac110a18d08098aa497c8b84f88581524236c0f72b801beb4fa84"
+    },
+    "ui/battery_3.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_3_w.png",
+      "sha256": "d6f9426b8576ae3e2742e3386c03efe9dab3986c72c1ac3a794b8509790f9c8a"
+    },
+    "ui/battery_4.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_4_w.png",
+      "sha256": "9580f521dc6ca7495b1864e8ecf71c8fdde069f2b3b816df726194c5870bb563"
+    },
+    "ui/battery_5.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_5_w.png",
+      "sha256": "52cff970f881cc0f504f053c3555249a723c930a3ade60e061f71336b3b8941d"
+    },
+    "ui/battery_6.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_6_w.png",
+      "sha256": "ce8ff922f9c2e1a10489b0573f24c16e480780e6e7a880ed361b597de165f5b8"
+    },
+    "ui/battery_7.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_7_w.png",
+      "sha256": "08a23ea684dde36aa94f4a3b341d976106861f4b36e9358f08fca25cb66bb286"
+    },
+    "ui/battery_8.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_8_w.png",
+      "sha256": "a1961edb8acd24d8d20869f1f4e77fd7684e9d6f3993f2c819fe59afd566350e"
+    },
+    "ui/battery_9.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_9_w.png",
+      "sha256": "7363f74194ad6d4a9df52b5843f8340a472c2abc237f9c1e49a7262ef95e1b88"
+    },
+    "ui/battery_10.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_10_w.png",
+      "sha256": "11593ca035890f43fb899b9eea1a791472772e954caae6a7429aee9fa2914697"
+    },
+    "ui/battery_11.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_11_w.png",
+      "sha256": "2bbb6b70159b0e2d44091cfb3b7eb599d269c6d1e9214ebc4863b4869f255a6b"
+    },
+    "ui/battery_12.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_12_w.png",
+      "sha256": "c029dbdd7f2ea99ab43921f211874d394ac6f90cde5f82e68ca31cd8164119cb"
+    },
+    "ui/battery_13.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_13_w.png",
+      "sha256": "c9de74d4a7e9db6561715d004f4e9e1b2d545e4248a30a07e569578f16cacb90"
+    },
+    "ui/battery_14.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_14_w.png",
+      "sha256": "c56ff2c222e6683beb9546052c54f7c4de845521a973d23c9a0c4c468fbf439b"
+    },
+    "ui/battery_15.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_15_w.png",
+      "sha256": "fd6adce0a76aa44f190f1f88eb26c3c8b3b5cefb19a0c893483f6723e04599fe"
+    },
+    "ui/battery_16.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_16_w.png",
+      "sha256": "b16d14e247730362d8e95050ff34219900fa7f42d5fc6f5884d19e446771e1d9"
+    },
+    "ui/battery_17.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_battery_17_w.png",
+      "sha256": "392941e86be80f56fa485a8cb14c35f7c6f338d39bce44cc7bc436139e95277a"
+    },
+    "ui/signal_0.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_0_w.png",
+      "sha256": "9b0d4a937c601b560f6762fbc7526a9e2e6ea0473d96b365bb9052e0c0c3a670"
+    },
+    "ui/signal_1.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_1_w.png",
+      "sha256": "89ec814109295b70093a00c1eadb6d3c27ca430d8dbc0e99cb47bc7a605f4742"
+    },
+    "ui/signal_2.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_2_w.png",
+      "sha256": "91a5ecea4dfe8ea612b90c4a2efa20e5ee476900f83f3e9efef87ddb467901e8"
+    },
+    "ui/signal_3.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_3_w.png",
+      "sha256": "b4846b6e50f6cbdd007a35aad9d1013277e2ebedb18d8d39f996ed0457223c4e"
+    },
+    "ui/signal_4.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_4_w.png",
+      "sha256": "1763b88c809a642feda78dcf57b6b7e1284ba525f51ff30dfb86242158c3f0a4"
+    },
+    "ui/signal_5.png": {
+      "source": "WP桌面2c双卡版/WPzm_win10m 2c.apk:res/drawable-xxhdpi-v4/status_signal_5_w.png",
+      "sha256": "9b0d4a937c601b560f6762fbc7526a9e2e6ea0473d96b365bb9052e0c0c3a670"
+    },
+    "apps/browser.png": {
+      "source": "LauncherWP8/icon/0/edge8 ie.png",
+      "sha256": "2fba0c01178c4756a92edea7051073f60634e24df1959191a604de6781bc72ab"
+    },
+    "apps/files.png": {
+      "source": "LauncherWP8/icon/0/filemanager8.png",
+      "sha256": "c6a9ecad595ca343b63e657e340a0f3bcf05acb91747b6ff1b921b51249eb3b9"
+    },
+    "apps/mail.png": {
+      "source": "LauncherWP8/icon/0/email8.png",
+      "sha256": "5bd4e3ee9354811d1c191b0e2e911586d79f36d5c30b6b08c8752fe4c4d2d702"
+    },
+    "apps/phone.png": {
+      "source": "LauncherWP8/icon/0/phone8.png",
+      "sha256": "3a4e79288f7b0b809335364b0fc347e201e05e837b21b56f6ad8073d53065bce"
+    },
+    "apps/contacts.png": {
+      "source": "LauncherWP8/icon/0/Contacts8.png",
+      "sha256": "d6f2f9149400918777addf9e57ebdb032e9989b729abbfbde61a3cefea5cce27"
+    },
+    "apps/messages.png": {
+      "source": "LauncherWP8/icon/0/message8.png",
+      "sha256": "3bc6e168c145ad818351c3f79f65864f9ec2f0b46091aeb02143566b79db1bb3"
+    },
+    "apps/photos.png": {
+      "source": "LauncherWP8/icon/0/picture8.png",
+      "sha256": "59af624b96cf3354cedf0e0cfb8cd3fb85215d83d481835d3fe8a066bd3988a6"
+    },
+    "apps/camera.png": {
+      "source": "LauncherWP8/icon/0/cam8.png",
+      "sha256": "b4d1f14d490c4e8cb424ba140a3e822854c32e3cd3840d1e94779aa74a9ab217"
+    },
+    "apps/clock.png": {
+      "source": "LauncherWP8/icon/0/shizhong8.png",
+      "sha256": "e33fafb66dbc01356ac8b785f6ae70e277181ffe26b92dc34c4c82bca9db0863"
+    },
+    "apps/calendar.png": {
+      "source": "LauncherWP8/icon/0/rili8.png",
+      "sha256": "26deff1aa08eb235055a18e3cc2bef797819cf1fbda3539e6ebabe9df8ac84a7"
+    },
+    "apps/weather.png": {
+      "source": "LauncherWP8/icon/0/tianqi8.png",
+      "sha256": "d7b6a190159bfb8d935150b50f5fd6ce5625cb9f78643368dce66ff3ffe5f80a"
+    },
+    "apps/music.png": {
+      "source": "LauncherWP8/icon/0/music8.png",
+      "sha256": "e6ae7ab5d4d57f3e95e8f39f02a8d3b7f19c76520f8b1b245e95d3bdefca026b"
+    },
+    "apps/settings.png": {
+      "source": "LauncherWP8/icon/0/setting8.png",
+      "sha256": "f04f59d884cfff3212d1842e56bd6fc954255c8478cbfe556122c75abc045195"
+    },
+    "apps/notes.png": {
+      "source": "LauncherWP8/icon/0/notes8.png",
+      "sha256": "1efa4530246e04d76c1a812a1327d1ca3f115f029f08da0f3e308ae80ad2b4e8"
+    },
+    "apps/calculator.png": {
+      "source": "LauncherWP8/icon/0/jishqi8.png",
+      "sha256": "052181ed3737d093e96176fe1b85907eaaa3ce1f500790a0e6456a960ec712d5"
+    },
+    "apps/video.png": {
+      "source": "LauncherWP8/icon/0/movie8.png",
+      "sha256": "481b6bf7ea8d54d528e88573e33d243eaa97f08da53b50191fb288290128cae7"
+    },
+    "apps/maps.png": {
+      "source": "LauncherWP8/icon/0/maps8.png",
+      "sha256": "d796a93c8244814125573b74837bf75b3ac9fd19b98125f00ad79ac47e8e229d"
+    },
+    "apps/store.png": {
+      "source": "LauncherWP8/icon/5/Google-Play.png",
+      "sha256": "53b01ad39ad86cb97eedaa9c7d5a93a31f9796bf2a9332c15651e2966bd232f5"
+    },
+    "apps/gimp.png": {
+      "source": "LauncherWP8/icon/5/GIMP.png",
+      "sha256": "d17f8903ff371cb5644af4ea2775b877979e6bf104d0ccfbe43c3c9d78046a20"
+    },
+    "apps/screenshot.png": {
+      "source": "LauncherWP8/icon/5/Screenshot.png",
+      "sha256": "810c76a28770fbf3c171a99da3cdaf60fcef24a8c92add6a3fc9b7b2b8aa2471"
+    },
+    "apps/word.png": {
+      "source": "LauncherWP8/icon/0/Of_word.png",
+      "sha256": "3a37345e913ba4a89b335a711d988e4c2228d41d149ead31a26f73b0cf0dd792"
+    },
+    "apps/spreadsheet.png": {
+      "source": "LauncherWP8/icon/0/Of_excel.png",
+      "sha256": "b3e371a9caa20e72bb3eeeb20e3ac424f9635fb1d16edb19ed33261222539263"
+    },
+    "apps/presentation.png": {
+      "source": "LauncherWP8/icon/0/Of_powerpoint.png",
+      "sha256": "96c787a7f85b73d395f9d42d8fb1fb737339f15a8ca9dd0bf62f38546e08899f"
+    },
+    "apps/reader.png": {
+      "source": "LauncherWP8/icon/4/reader1.png",
+      "sha256": "e18bc0d2ec8d0567c0a92e1a506e4c03d99bcdc8a1f6c1b0a002e265a740eecf"
+    },
+    "apps/steam.png": {
+      "source": "LauncherWP8/icon/5/Steam-alt.png",
+      "sha256": "15289e1672f335e251882a80ed67ca5fd1da5929443e3483d73f09ed21463d40"
+    },
+    "apps/spotify.png": {
+      "source": "LauncherWP8/icon/5/Spotify.png",
+      "sha256": "3b06905569f64980a11970853a77428bbfc4d8974c200dd1ce408d150c4909e2"
+    },
+    "apps/telegram.png": {
+      "source": "LauncherWP8/icon/5/Messaging.png",
+      "sha256": "e0e43fb597102083d34ddc8395afa40b2aa3feb14cbec01ac9c10cbca0a25c2c"
+    },
+    "apps/blender.png": {
+      "source": "LauncherWP8/icon/5/Blender.png",
+      "sha256": "f68a1061b87770c39a7ea888852570be6a7a0f7e8e214267e9a1c407255d02bd"
+    },
+    "apps/vscode.png": {
+      "source": "LauncherWP8/icon/5/Visual-Studio-2012.png",
+      "sha256": "077abf12ef78fda0db2e7278fd531e7d57e935ddf3c2d95c2231e1f1d4a95ab2"
+    }
+  }
+}

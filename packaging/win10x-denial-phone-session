@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Nubia phone deployment; the desktop-independent configuration is intentional.
+set -euo pipefail
+export XDG_CONFIG_HOME="$HOME/.config/win10x-denial-phone"
+export XDG_STATE_HOME="$HOME/.local/state/win10x-denial-phone"
+export LANG=C.UTF-8
+export QT_QPA_PLATFORM=wayland
+# Denial exposes text-input-v3. Prefer its native broker for Qt Wayland clients
+# when the user has not deliberately selected another input context.
+export QT_WAYLAND_TEXT_INPUT_PROTOCOL="${QT_WAYLAND_TEXT_INPUT_PROTOCOL:-zwp_text_input_v3}"
+if [[ -L /opt/win10x-denial/auth-current ]]; then
+    export WIN10X_DENIAL_AUTH_BUNDLE=/opt/win10x-denial/auth-current
+fi
+export WIN10X_DENIAL_ROOT=/opt/win10x-denial/current/lib/win10x-denial
+
+# Retain the phone's established short-power-key behavior. Denial's desktop
+# default is powerOff; only seed a missing preference, never overwrite a choice.
+python3 - "$XDG_CONFIG_HOME/denial/settings.json" <<'PY'
+import json, os, pathlib, tempfile, sys
+path = pathlib.Path(sys.argv[1])
+settings = json.loads(path.read_text()) if path.exists() else {}
+power = settings.setdefault('power', {})
+if 'powerButtonAction' not in power:
+    power['powerButtonAction'] = 'dpms'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.phone-power-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(settings, stream, indent=2)
+            stream.write('\n')
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name): os.unlink(name)
+PY
+
+# A private session bus avoids reusing services from a retained Plasma session.
+exec dbus-run-session -- /opt/win10x-denial/current/bin/win10x-denial-session \
+    --device /dev/dri/card0 \
+    --output-config "$XDG_CONFIG_HOME/denial/outputs.conf" \
+    --system-bar hidden --maximize-padding 0 "$@"

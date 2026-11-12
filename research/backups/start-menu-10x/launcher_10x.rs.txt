@@ -1,0 +1,311 @@
+// Backup of Win10X centered Launcher (card + 5×3 app grid + Recent).
+// Restored from research/backups/start-menu-10x/ — paste draw_launcher into ShellApp
+// and free functions into main.rs if you want this style again.
+// Snapshot date: 2026-08-13
+
+    fn draw_launcher(&mut self, ui: &mut egui::Ui, desktop: egui::Rect) {
+        // Light 10X: soft veil, not a heavy black dim.
+        ui.painter().rect_filled(
+            desktop,
+            0.0,
+            if matches!(self.theme, Fluent1Theme::Light) {
+                Color32::from_rgba_unmultiplied(255, 255, 255, if self.nested { 18 } else { 28 })
+            } else if self.nested {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 60)
+            } else {
+                self.pal.overlay
+            },
+        );
+        let card = inset_card(desktop, 28.0, 48.0, 16.0, 48.0);
+        let pal = self.pal;
+        let backdrop = self.acrylic(desktop);
+        fluent1::paint_acrylic(ui, card, &pal, backdrop);
+        self.reveal.paint_on(ui, card, &self.pal);
+
+        let q = self.search.to_lowercase();
+        let show_all = self.show_all_apps || !q.is_empty();
+        let apps: Vec<_> = {
+            let mut list: Vec<_> = self
+                .snap
+                .apps
+                .iter()
+                .filter(|a| q.is_empty() || a.name.to_lowercase().contains(&q))
+                .cloned()
+                .collect();
+            if !show_all {
+                // Prefer pinned first, then fill to a 5×3 grid.
+                list.sort_by_key(|a| (!a.pinned, a.name.to_lowercase()));
+                list.truncate(15);
+            } else {
+                list.truncate(60);
+            }
+            list
+        };
+        let recent = self.snap.recent.clone();
+        let mut launch_id: Option<String> = None;
+        let mut toggle_all = false;
+
+        ui.scope_builder(UiBuilder::new().max_rect(card), |ui| {
+            ui.winui(|ui| {
+                ui.column(|ui| {
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.add_sized(
+                            egui::vec2((ui.available_width() - 16.0).max(120.0), 36.0),
+                            egui::TextEdit::singleline(&mut self.search)
+                                .hint_text("Search the web or your devices.")
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+
+                    ui.add_space(18.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(
+                            RichText::new("My apps and websites")
+                                .strong()
+                                .size(15.0)
+                                .color(pal.text),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(20.0);
+                            let label = if self.show_all_apps {
+                                "Show less"
+                            } else {
+                                "Show all"
+                            };
+                            if ui.button(label).clicked() {
+                                toggle_all = true;
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+                    // Reserve Recent band (~28% of card) unless showing all apps.
+                    let grid_top = ui.cursor().top();
+                    let grid_bottom = if show_all {
+                        card.max.y - 20.0
+                    } else {
+                        (card.max.y - card.height() * 0.28).max(grid_top + 120.0)
+                    };
+                    let grid_rect = egui::Rect::from_min_max(
+                        egui::pos2(card.min.x + 16.0, grid_top),
+                        egui::pos2(card.max.x - 16.0, grid_bottom),
+                    );
+
+                    if show_all {
+                        egui::ScrollArea::vertical()
+                            .max_height(grid_rect.height())
+                            .show(ui, |ui| {
+                                if let Some(id) =
+                                    paint_app_grid(ui, grid_rect, &apps, &pal, 5, None)
+                                {
+                                    launch_id = Some(id);
+                                }
+                            });
+                    } else if let Some(id) =
+                        paint_app_grid(ui, grid_rect, &apps, &pal, 5, Some(3))
+                    {
+                        launch_id = Some(id);
+                    }
+
+                    if !show_all {
+                        // Jump past the absolute-positioned grid band.
+                        ui.allocate_exact_size(
+                            egui::vec2(grid_rect.width(), grid_rect.height()),
+                            Sense::hover(),
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(20.0);
+                            ui.label(
+                                RichText::new("Recent").strong().size(15.0).color(pal.text),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        if recent.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new(
+                                        "The more you use your device, the more we'll show your recent files and new apps here.",
+                                    )
+                                    .size(13.0)
+                                    .color(pal.text_secondary),
+                                );
+                            });
+                        } else {
+                            for item in recent.iter().take(6) {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(24.0);
+                                    ui.label(RichText::new(item).size(13.0).color(pal.text));
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+        });
+
+        if toggle_all {
+            self.show_all_apps = !self.show_all_apps;
+        }
+        if let Some(id) = launch_id {
+            self.launch(&id);
+        }
+    }
+
+
+/// Tile apps into `grid_rect`.
+/// - Default Start: `rows = Some(3)` → fixed **5×3**, cells fill the rect.
+/// - Show all: `rows = None` → 5 columns, scrollable.
+/// Icon frames are always **16:9** or **4:3**; app name is drawn **inside** the frame.
+fn paint_app_grid(
+    ui: &mut egui::Ui,
+    grid_rect: egui::Rect,
+    apps: &[win10x_protocol::AppEntry],
+    pal: &Palette,
+    columns: usize,
+    rows: Option<usize>,
+) -> Option<String> {
+    let columns = columns.max(1);
+    let mut launch = None;
+
+    if grid_rect.width() < 40.0 || grid_rect.height() < 40.0 {
+        return None;
+    }
+
+    ui.scope_builder(UiBuilder::new().max_rect(grid_rect), |ui| {
+        let area = ui.max_rect();
+        let (cell_w, cell_h, row_count) = if let Some(r) = rows {
+            let r = r.max(1);
+            (area.width() / columns as f32, area.height() / r as f32, r)
+        } else {
+            let cw = area.width() / columns as f32;
+            // Cell height tracks a 16:9 frame plus a little outer padding.
+            let ch = (cw / (16.0 / 9.0) + 12.0).clamp(72.0, 132.0);
+            let needed = apps.len().div_ceil(columns).max(1);
+            (cw, ch, needed)
+        };
+
+        for row in 0..row_count {
+            for col in 0..columns {
+                let i = row * columns + col;
+                let cell = egui::Rect::from_min_size(
+                    egui::pos2(
+                        area.min.x + col as f32 * cell_w,
+                        area.min.y + row as f32 * cell_h,
+                    ),
+                    egui::vec2(cell_w, cell_h),
+                );
+
+                let Some(app) = apps.get(i) else {
+                    continue;
+                };
+                let id = app.id.clone();
+                let name = app.name.clone();
+                let ic = app_icon(&name, &id);
+
+                let resp = ui.interact(cell, ui.id().with(("app_tile", i)), Sense::click());
+
+                let pad = (cell_w.min(cell_h) * 0.06).clamp(4.0, 10.0);
+                let frame_budget = egui::vec2(
+                    (cell_w - pad * 2.0).max(16.0),
+                    (cell_h - pad * 2.0).max(16.0),
+                );
+                let frame_size = fit_icon_frame(frame_budget);
+                let frame = egui::Rect::from_center_size(cell.center(), frame_size);
+
+                let frame_fill = if resp.hovered() {
+                    Color32::from_rgba_unmultiplied(
+                        pal.control.r(),
+                        pal.control.g(),
+                        pal.control.b(),
+                        220,
+                    )
+                } else {
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 200)
+                };
+                ui.painter().rect(
+                    frame,
+                    CornerRadius::same(4),
+                    frame_fill,
+                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 28)),
+                    StrokeKind::Inside,
+                );
+
+                // Name sits inside the frame; icon occupies the upper band.
+                let inner = frame.shrink2(egui::vec2(6.0, 5.0));
+                let label_band = (inner.height() * 0.28).clamp(14.0, 22.0);
+                let icon_band = egui::Rect::from_min_max(
+                    inner.min,
+                    egui::pos2(inner.max.x, inner.max.y - label_band),
+                );
+                let icon_px = (icon_band.height() * 0.62).clamp(16.0, 44.0);
+                let label_px = (label_band * 0.72).clamp(10.0, 13.0);
+                let max_chars = ((inner.width() / (label_px * 0.55)).floor() as usize).clamp(6, 20);
+
+                ui.painter().text(
+                    icon_band.center(),
+                    egui::Align2::CENTER_CENTER,
+                    ic.glyph(),
+                    fluent_egui::winui::icon_font_id(icon_px),
+                    pal.accent,
+                );
+                ui.painter().text(
+                    egui::pos2(inner.center().x, inner.max.y - label_band * 0.42),
+                    egui::Align2::CENTER_CENTER,
+                    truncate_label(&name, max_chars),
+                    egui::FontId::proportional(label_px),
+                    pal.text,
+                );
+                if resp.on_hover_text(&name).clicked() {
+                    launch = Some(id);
+                }
+            }
+        }
+
+        if rows.is_none() {
+            let h = cell_h * row_count as f32;
+            ui.allocate_exact_size(egui::vec2(area.width(), h), Sense::hover());
+        }
+    });
+
+    launch
+}
+
+/// Largest **16:9** or **4:3** frame that fits in `budget` (pick the bigger area).
+fn fit_icon_frame(budget: egui::Vec2) -> egui::Vec2 {
+    const R16_9: f32 = 16.0 / 9.0;
+    const R4_3: f32 = 4.0 / 3.0;
+
+    let fit = |ratio: f32| -> egui::Vec2 {
+        let by_w = egui::vec2(budget.x, budget.x / ratio);
+        if by_w.y <= budget.y + 0.01 {
+            return by_w;
+        }
+        egui::vec2(budget.y * ratio, budget.y)
+    };
+
+    let a = fit(R16_9);
+    let b = fit(R4_3);
+    if a.x * a.y >= b.x * b.y {
+        a
+    } else {
+        b
+    }
+}
+
+fn truncate_label(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+

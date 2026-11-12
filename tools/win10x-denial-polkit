@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Build authentication presentation against the same pinned patched engine."""
+import argparse, importlib.machinery, importlib.util, hashlib, json, os, shutil, subprocess, tempfile
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+def module(name,path):
+ loader=importlib.machinery.SourceFileLoader(name,str(path));spec=importlib.util.spec_from_loader(name,loader);m=importlib.util.module_from_spec(spec);loader.exec_module(m);return m
+base=module('polkit_base',ROOT/'tools/win10x-denial')
+SOURCE=ROOT/'denial/polkit_app';WORK=ROOT/'target/denial-polkit';APP=WORK/'app'
+def digest():
+ h=hashlib.sha256()
+ paths=[Path(__file__),ROOT/'denial/upstream.lock.json']+sorted(SOURCE.rglob('*'))+[ROOT/'flutter_shell/lib/src/fluent.dart']
+ for p in paths:
+  if p.is_file():h.update(str(p.relative_to(ROOT)).encode());h.update(p.read_bytes())
+ return h.hexdigest()
+def prepare():
+ base.prepare();APP.mkdir(parents=True,exist_ok=True)
+ shutil.copytree(SOURCE/'lib',APP/'lib',dirs_exist_ok=True)
+ # JSON is valid YAML; dependency overrides select Denial's patched declarations.
+ spec={'name':'denial_polkit_app','version':'0.0.0','publish_to':'none','environment':{'sdk':'^3.13.0','flutter':base.LOCK['flutter']},'dependencies':{'flutter':{'sdk':'flutter'},'flutter_riverpod':'3.3.2','denial_flutter_sdk':{'path':str(base.KIT/'runtime/packages/denial_flutter_sdk')},'win10x_shell':{'path':str(ROOT/'flutter_shell')}},'dev_dependencies':{'flutter_lints':'^6.0.0'},'flutter':{'uses-material-design':True}}
+ (APP/'pubspec.yaml').write_text(json.dumps(spec,indent=2)+'\n')
+ (APP/'pubspec_overrides.yaml').write_text(json.dumps({'dependency_overrides':{n:{'path':str(base.KIT/'runtime/packages'/n)} for n in ['denial_sdk','denial_flutter_sdk']}},indent=2)+'\n')
+ if not (APP/'pubspec.lock').exists():shutil.copy2(SOURCE/'pubspec.lock',APP/'pubspec.lock')
+ base.run(base.KIT/'flutter/bin/flutter','pub','get','--offline',cwd=APP)
+def build(options):
+ prepare();dart=base.CACHE/'dart-sdk/bin/dart';flutter=base.KIT/'flutter'
+ if options.command=='analyze':
+  base.run(dart,'format','--output=none','--set-exit-if-changed','lib',cwd=SOURCE)
+  base.run(dart,'analyze','--fatal-infos','lib',cwd=APP);return
+ before=digest();arch='arm64' if options.arm64 else 'x64';assembly=WORK/('assembly-'+arch)
+ engine_args=['--local-engine-src-path='+str(base.KIT/'engine'),'--local-engine=denial_host_release','--local-engine-host=denial_host_release']
+ if options.arm64:
+  arm=module('polkit_arm',ROOT/'tools/win10x-denial-arm64');manifest=arm.bootstrap();view=arm.WORK/'engine'
+  if not (view/'out'/manifest['engineTarget']/'gen_snapshot').exists():raise RuntimeError('Initialize the pinned ARM64 engine view with tools/win10x-denial-arm64 bundle first')
+  if arm.using_qemu():os.environ['WIN10X_ARM64_COMPILER']=str(arm.ARM_KIT/'engine/out'/manifest['engineTarget']/'gen_snapshot')
+  else:
+   if arm.ssh('uname -m',capture=True).stdout.strip()!='aarch64':raise RuntimeError('Wrong AOT host')
+   home=arm.ssh('printf %s "$HOME"',capture=True).stdout
+   compiler=home+'/.cache/win10x-denial/0.6.2-arm64/gen_snapshot';os.environ['WIN10X_ARM64_COMPILER']=compiler
+   expected=base.digest(arm.ARM_KIT/'engine/out'/manifest['engineTarget']/'gen_snapshot')
+   if arm.ssh('sha256sum '+compiler,capture=True).stdout.split()[0]!=expected:raise RuntimeError('ARM64 compiler mismatch')
+  engine_args=['--local-engine-src-path='+str(view),'--local-engine='+manifest['engineTarget'],'--local-engine-host=denial_host_release']
+  engine=arm.RUNTIME/'usr/lib/denial/flutter/lib/libflutter_engine.so'
+ else:engine=base.CACHE/'usr/lib/denial/flutter/lib/libflutter_engine.so'
+ for stamp in (APP/'.dart_tool/flutter_build').glob('*/release_bundle_linux-'+arch+'_assets.stamp'):stamp.unlink()
+ entry='lib/preview.dart' if options.preview else 'lib/main.dart'
+ base.run(dart,'--packages='+str(flutter/'packages/flutter_tools/.dart_tool/package_config.json'),flutter/'bin/cache/flutter_tools.snapshot',*engine_args,'assemble','--suppress-analytics','--resource-pool-size=12','--output='+str(assembly),'-dTargetFile='+entry,'-dBuildMode=release','-dTargetPlatform=linux-'+arch,'-dDartObfuscation=false','-dTrackWidgetCreation=false','-dTreeShakeIcons=true','release_bundle_linux-'+arch+'_assets',cwd=APP)
+ if digest()!=before:raise RuntimeError('Authentication source changed during compilation')
+ generations=WORK/'bundles';generations.mkdir(exist_ok=True);out=Path(tempfile.mkdtemp(prefix=before[:12]+'-'+arch+'-',dir=generations));out.chmod(0o755)
+ (out/'lib').mkdir();(out/'data').mkdir();shutil.copy2(assembly/'lib/libapp.so',out/'lib/libapp.so');shutil.copy2(engine,out/'lib/libflutter_engine.so');shutil.copy2(base.KIT/'engine/out/denial_host_release/icudtl.dat',out/'data/icudtl.dat');shutil.copytree(assembly/'flutter_assets',out/'data/flutter_assets')
+ meta={'denial_revision':base.LOCK['revision'],'source_sha256':before,'target':'linux-'+arch,'preview_only':options.preview,'app_sha256':base.digest(out/'lib/libapp.so'),'engine_sha256':base.digest(engine)};(out/'win10x-auth-build.json').write_text(json.dumps(meta,indent=2)+'\n')
+ if arch=='x64':base.run(base.CACHE/'usr/lib/denial/polkit/denial-app','--bundle',out,'--engine',out/'lib/libflutter_engine.so','--check')
+ else:
+  for n in ['libapp.so','libflutter_engine.so']:
+   if (out/'lib'/n).read_bytes()[18:20]!=b'\xb7\x00':raise RuntimeError('Non-ARM64 auth library')
+ base.publish_bundle(out,WORK/(('preview-' if options.preview else 'bundle-')+arch));print('Built pinned authentication presentation',out)
+def stage(destination, arch):
+ candidate=WORK/('bundle-'+arch)
+ if not candidate.exists():
+  print('Custom authentication bundle absent for',arch,'; retaining upstream presentation')
+  return
+ candidate=candidate.resolve();meta=json.loads((candidate/'win10x-auth-build.json').read_text())
+ if meta['source_sha256']!=digest() or meta['preview_only'] or meta['target']!='linux-'+arch or meta['denial_revision']!=base.LOCK['revision']:
+  raise RuntimeError('Rebuild current production authentication bundle before packaging')
+ for name,key in [('libapp.so','app_sha256'),('libflutter_engine.so','engine_sha256')]:
+  if base.digest(candidate/'lib'/name)!=meta[key]:raise RuntimeError('Changed authentication library '+name)
+ target=Path(destination)/'lib/win10x-denial/runtime/usr/lib/denial/polkit'
+ if base.digest(target/'lib/libflutter_engine.so')!=meta['engine_sha256']:raise RuntimeError('Authentication engine differs from packaged runner engine')
+ shutil.copy2(candidate/'lib/libapp.so',target/'lib/libapp.so')
+ shutil.rmtree(target/'data/flutter_assets');shutil.copytree(candidate/'data/flutter_assets',target/'data/flutter_assets')
+ shutil.copy2(candidate/'data/icudtl.dat',target/'data/icudtl.dat')
+ shutil.copy2(candidate/'win10x-auth-build.json',target/'win10x-auth-build.json')
+ for name in ['UPSTREAM.md','LICENSE.upstream']:shutil.copy2(SOURCE/name,target/name)
+ print('Staged Fluent authentication presentation',meta['source_sha256'])
+
+if __name__=='__main__':
+ p=argparse.ArgumentParser();p.add_argument('command',choices=['analyze','bundle']);p.add_argument('--arm64',action='store_true');p.add_argument('--preview',action='store_true');build(p.parse_args())

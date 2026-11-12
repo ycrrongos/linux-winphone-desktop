@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Restore/verify the immutable keyboard integration defined in UPSTREAM.json."""
+import argparse,json,hashlib,subprocess
+from pathlib import Path
+root=Path(__file__).resolve().parents[1]
+p=argparse.ArgumentParser();p.add_argument('--check',action='store_true');p.add_argument('checkout',type=Path);args=p.parse_args()
+source=args.checkout.resolve();manifest=json.loads((root/'third_party/winphone-pinyin/UPSTREAM.json').read_text())
+head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=source,text=True).strip()
+if head!=manifest['revision']:raise SystemExit('Keyboard checkout is not the pinned revision')
+pending=[]
+for item in manifest['files']:
+ data=(source/item['source']).read_bytes()
+ if hashlib.sha256(data).hexdigest()!=item['source_sha256']:raise SystemExit('Keyboard source modified: '+item['source'])
+ if item['source'].endswith('pinyin_keyboard.dart'):data=data.replace(b'packages/winphone_pinyin/assets/ime/',b'packages/win10x_shell/assets/ime/')
+ if hashlib.sha256(data).hexdigest()!=item['integrated_sha256']:raise SystemExit('Integration hash mismatch')
+ target=root/item['destination']
+ if args.check:
+  if target.read_bytes()!=data:raise SystemExit('Integrated copy differs: '+item['destination'])
+ else:pending.append((target,data))
+for target,data in pending:target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+print('Pinned keyboard integration verified' if args.check else 'Pinned keyboard integration restored')

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Win10X (Denial / Flutter, experimental)
+Comment=Win10X touch shell on the Denial compositor
+Exec=win10x-denial-session
+TryExec=win10x-denial-session
+Type=Application
+DesktopNames=Win10X;Denial;

@@ -1,0 +1,49 @@
+{
+  "repository": "https://github.com/ycrrongos/winphone-pinyin-keyboard.git",
+  "revision": "4257dc161fa1c311f9391ec08937f4a5c4c70add",
+  "license": "GPL-3.0-only; dictionary Apache-2.0",
+  "files": [
+    {
+      "source": "lib/src/pinyin_engine.dart",
+      "destination": "flutter_shell/lib/src/ime/pinyin_engine.dart",
+      "source_sha256": "90e9c401d08515a25739f452624848b0972b5c981d7f227ab52a3520f9f38b94",
+      "integrated_sha256": "90e9c401d08515a25739f452624848b0972b5c981d7f227ab52a3520f9f38b94"
+    },
+    {
+      "source": "lib/src/pinyin_session.dart",
+      "destination": "flutter_shell/lib/src/ime/pinyin_session.dart",
+      "source_sha256": "484badab40438d9ee09f29eaa541916f37aeff8edfad84b54156926b1376396c",
+      "integrated_sha256": "484badab40438d9ee09f29eaa541916f37aeff8edfad84b54156926b1376396c"
+    },
+    {
+      "source": "integration/denial/pinyin_keyboard.dart",
+      "destination": "denial/keyboard/pinyin_keyboard.dart",
+      "source_sha256": "739e1f237839993b1d17f6d11888c000bd952e688084f24301f950f40f08a49e",
+      "integrated_sha256": "7deda4430354089261b7355db27e28b9a16976665f012a9f526b1ff354a2b2f2"
+    },
+    {
+      "source": "integration/denial/wp_motion.dart",
+      "destination": "flutter_shell/lib/src/wp_motion.dart",
+      "source_sha256": "d99f6a531a3dad3e1ea06cdc3323a3ff06f285dffeeeb5e2815bc6ead4d24a06",
+      "integrated_sha256": "d99f6a531a3dad3e1ea06cdc3323a3ff06f285dffeeeb5e2815bc6ead4d24a06"
+    },
+    {
+      "source": "assets/ime/NOTICE.md",
+      "destination": "flutter_shell/assets/ime/NOTICE.md",
+      "source_sha256": "403e1754eb7f22bcf0bb240459b177acd1057896131ba90c39274c65c0d444bc",
+      "integrated_sha256": "403e1754eb7f22bcf0bb240459b177acd1057896131ba90c39274c65c0d444bc"
+    },
+    {
+      "source": "assets/ime/LICENSE.pinyin-simp",
+      "destination": "flutter_shell/assets/ime/LICENSE.pinyin-simp",
+      "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "integrated_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "source": "assets/ime/pinyin_simp.dict.yaml",
+      "destination": "flutter_shell/assets/ime/pinyin_simp.dict.yaml",
+      "source_sha256": "e341598343a0f0f2035bb1aafc34a7f3bb7887deeecb3f60796262aaa2983e6b",
+      "integrated_sha256": "e341598343a0f0f2035bb1aafc34a7f3bb7887deeecb3f60796262aaa2983e6b"
+    }
+  ]
+}

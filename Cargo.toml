@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/win10x-protocol",
+    "shell",
+    "compositor",
+]
+default-members = ["shell", "compositor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+authors = ["Win10X Linux Desktop contributors"]
+
+[workspace.dependencies]
+win10x-protocol = { path = "crates/win10x-protocol" }
+win10x-shell = { path = "shell" }
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

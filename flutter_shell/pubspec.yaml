@@ -1,0 +1,30 @@
+name: win10x_shell
+description: Win10X touch shell contributions for the pinned Denial runtime.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.13.0
+  flutter: 3.47.5
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: 3.3.2
+  denial_sdk: 0.0.0
+  denial_flutter_sdk: 0.0.0
+dev_dependencies:
+  test: ^1.31.1
+  flutter_lints: ^6.0.0
+denial_plugin:
+  schema: 1
+  name: Win10X Touch Shell
+  provides:
+    - contract: package:denial_flutter_sdk/surfaces.dart#ShellSurface
+    - contract: package:denial_flutter_sdk/launcher.dart#ShellLauncher
+    - contract: package:denial_flutter_sdk/actions.dart#ShellAction
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/ime/
+    - assets/wp_icons/nav/
+    - assets/wp_icons/apps/
+    - assets/wp_icons/ui/

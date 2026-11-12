@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve the adjacent installed/staged prefix; no checkout/cache path leaks.
+WIN10X_DENIAL_BIN="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WIN10X_DENIAL_ROOT="${WIN10X_DENIAL_ROOT:-$WIN10X_DENIAL_BIN/../lib/win10x-denial}"
+if [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]]; then
+    echo 'Win10X Denial: an existing graphical session is active; use the UI preview or log out first.' >&2
+    exit 2
+fi
+export DENIAL_SHELL_PROFILE=desktop
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP='Win10X:Denial'
+export XDG_SESSION_DESKTOP=Win10X
+export DENIAL_COMPOSITOR_BINARY="$WIN10X_DENIAL_ROOT/runtime/usr/bin/deniald"
+export DENIAL_CONTROL_TOOL="$WIN10X_DENIAL_ROOT/runtime/usr/bin/denialctl"
+export DENIAL_SETTINGS_BINARY="$WIN10X_DENIAL_ROOT/runtime/usr/bin/denial-settings"
+export PATH="$WIN10X_DENIAL_ROOT/runtime/usr/bin:$PATH"
+
+# Native startup owns agent lifetime and Wayland readiness. Use the isolated
+# bundle paths rather than the distribution agent's /usr defaults.
+export DENIAL_POLKIT_BINARY="$WIN10X_DENIAL_BIN/win10x-denial-polkit-agent"
+exec "$DENIAL_COMPOSITOR_BINARY" --wayland \
+    --flutter-bundle "$WIN10X_DENIAL_ROOT/shell" "$@"
