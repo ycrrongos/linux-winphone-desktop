@@ -2097,6 +2097,26 @@ Append-only record of completed features and repository changes. Required by
 - **Status/follow-up:** Prepared/verified; remote repository creation/push and
   remote author/contributor verification follow before completion claim.
 
+### 2026-11-13 — two GitHub repositories published and remotely verified
+
+- **Request:** Upload desktop and keyboard separately; contributor identity only
+  user, repository descriptions disclose Codex development.
+- **Change:** Created private ycrrongos/win10x-denial-desktop and
+  ycrrongos/winphone-pinyin-keyboard, fresh main root commits. Descriptions and
+  READMEs state developed with Codex. Existing project origin/history preserved.
+- **Files/components:** Publication checkout snapshots and pinned keyboard
+  manifest, docs/github-publication.md; generated remote-verification.json.
+- **Verification:** Both pushes exit0. GitHub API main SHAs match local desktop
+  c8188f852e816e2137ddbbdbdab86a3ac9ae67c6 and keyboard
+  4257dc161fa1c311f9391ec08937f4a5c4c70add. Both author/committer accounts map to
+  ycrrongos; both Contributors lists exactly[ycrrongos]; both private and Codex
+  descriptions verified. Source/credential scan passed before push; upstream
+  notices retained. Desktop export analyze/56 tests/bundle and independent core
+  analyze/3 tests plus installer/parity checks passed before publication.
+- **Status/follow-up:** Complete. Visibility remains private by stated default
+  after unanswered optional choice. Future publication uses the two independent
+  checkouts; do not force-push their fresh history into the older origin.
+
 ### 2026-11-13 — user selected public visibility and final repository names
 
 - **Request:** Make both repositories public; desktop `linux-winphone-desktop`,
@@ -2110,3 +2130,48 @@ Append-only record of completed features and repository changes. Required by
   visibility, remote push and contributor verification follow before reporting.
 - **Status/follow-up:** Current explicit public choice supersedes the earlier
   unanswered-question/private default. Original legacy origin remains unchanged.
+
+### 2026-11-13 — final public names applied and verified
+
+- **Request:** Both repositories public; exact names linux-winphone-desktop and
+  linux-pinyin-keybord-wp.
+- **Change:** Renamed existing repositories (preserving IDs/history), set public,
+  updated local origins/README links/package repository metadata and keyboard
+  commit provenance. Only user-authored commits; Codex descriptions retained.
+- **Files/components:** New publication checkout README/pubspec/UPSTREAM metadata,
+  docs/github-publication.md and generated published/remote-verification.json.
+- **Verification:** Focused staged diff checks and pinned keyboard parity pass;
+  credential scan pass. Both pushes exit0. Anonymous API confirms exact final
+  names/public status and main SHAs desktop64fcd6e4021c85514a243e02813ce6b0a350e103,
+  keyboard6114670dc44c2c4832cbe836b6ebb22f4d408aac. All commits' author/committer
+  map to ycrrongos; Contributors exactly[ycrrongos], Codex descriptions verified.
+  No runtime code changed, so no additional UI/build repetition needed.
+- **Status/follow-up:** Complete. Initial Git push after rename returned403 with
+  disabled message; API disabledfalse and later anonymous Git read proved backend
+  readiness, then resumed push succeeded. No account restriction asserted.
+
+### 2026-11-13 — Fcitx-inspired editing tools and full PC keyboard
+
+- **Request:** Cursor movement/common shortcuts modeled on Fcitx Android and a
+  complete virtual computer keyboard with Fn.
+- **Change:** Fixed Edit/Computer/keypad entries; space swipe, selection/word
+  movement, copy/cut/paste/select-all/undo/redo; WP nonlinear state changes.
+  Computer layout includes function/navigation/modifier/Fn/keypad keys and keeps
+  Chinese composition. Focus/purpose changes cancel repeaters and modifier state;
+  keyboard controls exclude focus, native chords always release modifiers.
+  Pinned native map extension, verified x64/ARM64 broker and reproducible sysroot
+  tooling replace unsupported upstream PC keys; packages reject stale brokers.
+- **Files/components:** denial/keyboard, flutter_shell/lib/src/ime/keyboard_tools,
+  corresponding tests/fixtures, denial/native and build/package tools;
+  docs/keyboard-editing-and-pc.md. Independent keyboard publication updated.
+- **Verification:** Final source e7878e472ca2 analyze/62 tests/x64 bundle/package
+  PASS; 9 UI fixtures PASS including landscape/Chinese/sensitive/focus/space drag,
+  editor commands, PC and keypad. Independent package analyze/9 tests and exact
+  host patch install/idempotence PASS. Native mapping unit test and both native
+  builds PASS; ARM64 executable QEMU --help PASS (max GLIBC2.39). Verified108
+  locked target packages; automated project-local std bootstrap PASS.
+- **Status/follow-up:** Implementation/local acceptance complete. ARM64 Flutter
+  packaging finishing; phone SSH unavailable, no phone install/session changes.
+  Actual app clipboard/function-key acceptance remains untested this round.
+  Source publication sync follows; no claims of native application acceptance
+  are inferred from callback-spy UI tests.

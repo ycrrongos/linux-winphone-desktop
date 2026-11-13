@@ -161,3 +161,15 @@ under its upstream MIT/Apache-2.0 terms.
 Downloaded research pages, screenshots, product imagery, and Microsoft marks
 under `research/` are reference material and are **not** covered by the GPL
 grant. Do not redistribute or use them as product assets.
+
+## Keyboard editing and full computer mode
+
+
+The WP screen keyboard adds fixed Edit/Computer/keypad entries, space-swipe
+cursor movement, selection/word movement and copy/cut/paste/select-all/undo/redo.
+Computer mode includes F1–F12, Fn, Ctrl/Alt/Shift/Win/AltGr and navigation; it
+retains Chinese candidates for ordinary letters. Modifier chords are balanced
+and the keyboard controls preserve editor focus. See
+[interaction and acceptance](docs/keyboard-editing-and-pc.md) and
+[native x64/ARM64 build recipes](denial/native/README.md). Packaging requires the
+patched native broker rather than silently shipping unsupported function keys.

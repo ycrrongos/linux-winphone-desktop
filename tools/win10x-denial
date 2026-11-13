@@ -42,8 +42,9 @@ def source_digest():
     files = [ROOT / "denial/main.dart", ROOT / "denial/desktop_overrides.dart",
         ROOT / "denial/shell_chrome.dart", ROOT / "denial/window_motion_policy.dart",
         ROOT / "denial/preview_capture.dart", ROOT / "denial/client_surface_policy.dart", ROOT / "denial/upstream.lock.json",
-        ROOT / "denial/application.pubspec.lock", Path(__file__).resolve(),
+        ROOT / "denial/application.pubspec.lock", ROOT / "tools/win10x-denial-native", ROOT / "tools/prepare-denial-native-sysroot", Path(__file__).resolve(),
         SHELL / "pubspec.yaml", SHELL / "pubspec.lock"]
+    files.extend(sorted(path for path in (ROOT / "denial/native").rglob("*") if path.is_file()))
     files.extend(sorted((SHELL / "lib").rglob("*.dart")))
     files.extend(sorted((ROOT / "denial/keyboard").rglob("*.dart")))
     files.extend(sorted(path for path in (SHELL / "assets").rglob("*") if path.is_file()))
@@ -216,13 +217,20 @@ def prepare():
     replace_once(system_hud, "    final hud = ref.watch(systemLevelHudProvider);", "    final hud = ref.watch(systemLevelHudProvider);\n    if (win10xShellMode.value == 2 && hud?.kind == SystemLevelHudKind.audio) {\n      return win10xPhoneAudioHudBuilder?.call(context, hud!.revision, hud.visible, () => ref.read(systemLevelHudProvider.notifier).completeDismissal(hud.revision)) ?? const SizedBox.shrink();\n    }")
 
     osk_root = KIT / "runtime/plugins/denial_desktop/lib/src/widgets/osk"
-    for name in ("pinyin_engine.dart", "pinyin_session.dart"):
+    for name in ("pinyin_engine.dart", "pinyin_session.dart", "keyboard_tools.dart"):
         shutil.copyfile(SHELL / "lib/src/ime" / name, osk_root / name)
-    shutil.copyfile(ROOT / "denial/keyboard/pinyin_keyboard.dart", osk_root / "pinyin_keyboard.dart")
+    for name in ("pinyin_keyboard.dart", "keyboard_tools_panel.dart"):
+        shutil.copyfile(ROOT / "denial/keyboard" / name, osk_root / name)
     replace_once(edge_keyboard, "import 'osk/shell_osk_panel.dart';", "import 'osk/shell_osk_panel.dart';\nimport 'osk/pinyin_keyboard.dart';")
     replace_once(edge_keyboard, "child: ShellOskPanel(", "child: Win10xPinyinKeyboard(")
+    replace_once(edge_keyboard, "onKey: (intent) => _sendOskIntent(bridge, intent),", "onKey: (intent) => _sendOskIntent(bridge, intent),\n              onShortcut: (stroke) {\n                final held = <String>[];\n                try {\n                  for (final modifier in stroke.modifiers) { bridge.pressKeyboardKey(modifier); held.add(modifier); }\n                  bridge.sendKeyboardKey(stroke.key);\n                } finally {\n                  for (final modifier in held.reversed) { bridge.releaseKeyboardKey(modifier); }\n                }\n              },")
 
     osk = KIT / "runtime/plugins/denial_desktop/lib/src/widgets/osk/shell_osk_panel.dart"
+    replace_once(osk, "import 'dart:async';", "import 'dart:async';\nimport 'keyboard_tools.dart';")
+    replace_once(osk, "  _Touch(this.key, this.position);", "  _Touch(this.key, this.position);\n  final cursor = SpaceCursorDrag();")
+    replace_once(osk, "if (touch == null || touch.done || geometry == null) return;", "if (touch == null || (touch.done && !touch.cursor.active) || geometry == null) return;")
+    replace_once(osk, "    touch.position = position;", "    if (touch.key.spec.control == _OskControl.space || touch.cursor.active) {\n      final steps=touch.cursor.update(position.dx-touch.position.dx);\n      if (touch.cursor.active) {\n        _recognizer.claim(pointer);\n        touch.done=true; touch.longPress?.cancel();\n        for (var i=0; i<steps.abs(); i++) { widget.onKeyDown?.call(); widget.onKey?.call(ShellOskKeyIntent.key(steps>0 ? 'Right' : 'Left',ctrl:_ctrlArmed)); }\n      }\n      touch.position=position; return;\n    }\n    touch.position = position;")
+
     replace_once(osk, "import 'dart:async';", "import 'dart:async';\nimport '../../state/win10x_desktop_overrides.dart';")
     replace_once(osk, "    final foreground = selected", "    if (win10xShellMode.value == 2) { background = pressed || selected ? accent : control == null ? const Color(0xff3b3b3b) : const Color(0xff242424); }\n    final foreground = win10xShellMode.value == 2 ? const Color(0xffffffff) : selected")
     replace_once(osk, "borderRadius: theme.borderRadius(12),", "borderRadius: win10xShellMode.value == 2 ? BorderRadius.zero : theme.borderRadius(12),")
@@ -738,11 +746,22 @@ def stage_auth(destination, arch):
     auth.stage(destination, arch)
 
 
+def native_keyboard_binary(arch):
+    loader = importlib.machinery.SourceFileLoader('win10x_native_keyboard', str(ROOT / 'tools/win10x-denial-native'))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec); loader.exec_module(module)
+    try:
+        return module.verified_binary(arch)
+    except (FileNotFoundError, RuntimeError) as error:
+        raise RuntimeError('Build the matching PC-keyboard native broker first: tools/win10x-denial-native build --target ' + arch) from error
+
+
 def package():
     output = (WORK / "bundle").resolve()
     provenance = json.loads((output / "win10x-build.json").read_text())
     if provenance.get("source_sha256") != source_digest():
         raise RuntimeError("Rebuild the current worktree before packaging")
+    native_binary = native_keyboard_binary("x64")
     destination = ROOT / "packaging/out/denial"
     # Replace only our disposable staging directory, never installed files.
     if destination.exists():
@@ -751,7 +770,7 @@ def package():
     (runtime / "bin").mkdir(parents=True)
     (runtime / "lib/denial").mkdir(parents=True)
     for name in ("deniald", "denialctl", "denial-portal", "denial-polkit-agent", "denial-settings"):
-        shutil.copy2(CACHE / "usr/bin" / name, runtime / "bin" / name, follow_symlinks=False)
+        shutil.copy2(native_binary if name == "deniald" else CACHE / "usr/bin" / name, runtime / "bin" / name, follow_symlinks=False)
     for name in ("settings", "polkit"):
         shutil.copytree(CACHE / "usr/lib/denial" / name, runtime / "lib/denial" / name, symlinks=True)
     for name in ("denial", "denial-flutter-engine"):
@@ -767,6 +786,8 @@ def package():
     (destination / "libexec").mkdir(exist_ok=True)
     shutil.copy2(ROOT / "packaging/win10x-screen-hooks", destination / "libexec/win10x-screen-hooks")
     shutil.copy2(ROOT / "packaging/win10x-denial.desktop", destination / "share/wayland-sessions/win10x-denial.desktop")
+    shutil.copytree(ROOT / "denial/native", destination / "lib/win10x-denial/native-sources")
+    shutil.copy2(ROOT / "target/denial-native/x64.json", destination / "lib/win10x-denial/native-build.json")
     stage_auth(destination, "x64")
     print("Staged experimental session:", destination)
     print("Nothing was installed. Review, then run packaging/install-denial-session.sh explicitly.")

@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Rebuild the pinned native keyboard broker; never patch a binary in place."""
+import argparse,hashlib,json,os,shutil,subprocess,tempfile
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1];WORK=ROOT/'target/denial-native';SOURCE=WORK/'source'
+LOCK=json.loads((ROOT/'denial/upstream.lock.json').read_text());PATCH=ROOT/'denial/native/pc-keyboard.patch'
+FILE='compositor/src/bin/deniald/wayland_frontend/input.rs'
+def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def run(*args,**kwargs):return subprocess.run([str(a) for a in args],check=True,**kwargs)
+def prepare():
+ if not (SOURCE/'.git').exists():
+  WORK.mkdir(parents=True,exist_ok=True)
+  run('git','clone','--filter=blob:none','--no-checkout',LOCK['repository'],SOURCE)
+  run('git','checkout','--detach',LOCK['revision'],cwd=SOURCE)
+ head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=SOURCE,text=True).strip()
+ if head!=LOCK['revision']:raise RuntimeError('Native source is not pinned; refusing to modify it')
+ # Only this task-owned source file is reset. No user checkout is modified.
+ current=subprocess.check_output(['git','diff','--',FILE],cwd=SOURCE)
+ if current==PATCH.read_bytes():return
+ original=subprocess.check_output(['git','show',LOCK['revision']+':'+FILE],cwd=SOURCE)
+ (SOURCE/FILE).write_bytes(original)
+ run('git','apply','--check',PATCH,cwd=SOURCE);run('git','apply',PATCH,cwd=SOURCE)
+def verified_binary(arch):
+ m=json.loads((WORK/(arch+'.json')).read_text());binary=WORK/m['binary']
+ if m['revision']!=LOCK['revision'] or m['patch_sha256']!=sha(PATCH) or m['builder_sha256']!=sha(__file__) or m['binary_sha256']!=sha(binary):raise RuntimeError('Rebuild the current native keyboard broker')
+ machine=b'\xb7\x00' if arch=='arm64' else b'\x3e\x00'
+ if binary.read_bytes()[18:20]!=machine:raise RuntimeError('Wrong native broker architecture')
+ return binary
+
+def main():
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('command',choices=['build','test']);p.add_argument('--target',choices=['x64','arm64'],default='x64');p.add_argument('--sysroot',type=Path);a=p.parse_args();prepare()
+ env=dict(os.environ);args=['cargo','test' if a.command=='test' else 'build','--locked','--features','flutter','--bin','deniald','-j',os.environ.get('WIN10X_NATIVE_JOBS','8')]
+ if a.command=='build':args+=['--release']
+ if a.target=='arm64':
+  if a.command=='test':raise RuntimeError('Run native unit tests on x64; test ARM64 on a separate native seat')
+  if env.get('WIN10X_BUILD_STD')=='1':args+=['-Zbuild-std=std,panic_abort']
+  if not a.sysroot:raise RuntimeError('ARM64 build requires --sysroot containing target development libraries')
+  sysroot=a.sysroot.resolve();triple='aarch64-unknown-linux-gnu';args+=['--target',triple]
+  env.update(PKG_CONFIG_ALLOW_CROSS='1',PKG_CONFIG_SYSROOT_DIR=str(sysroot),PKG_CONFIG_LIBDIR=':'.join(str(sysroot/path) for path in ['usr/lib/aarch64-linux-gnu/pkgconfig','usr/lib/pkgconfig','usr/share/pkgconfig']),CC_aarch64_unknown_linux_gnu='aarch64-linux-gnu-gcc',CXX_aarch64_unknown_linux_gnu='aarch64-linux-gnu-g++',AR_aarch64_unknown_linux_gnu='aarch64-linux-gnu-ar',CFLAGS_aarch64_unknown_linux_gnu='--sysroot='+str(sysroot),CXXFLAGS_aarch64_unknown_linux_gnu='--sysroot='+str(sysroot),CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER='aarch64-linux-gnu-gcc')
+  flags='-C link-arg=--sysroot='+str(sysroot)+' -C link-arg=-Wl,-rpath-link,'+str(sysroot/'usr/lib/aarch64-linux-gnu')
+  if env.get('WIN10X_RUST_SYSROOT'):flags+=' --sysroot '+env['WIN10X_RUST_SYSROOT']
+  env['CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS']=flags
+ if a.command=='test':args+=['win10x_pc_keyboard_tests']
+ run(*args,cwd=SOURCE/'compositor',env=env)
+ if a.command=='build':
+  binary=SOURCE/'compositor/target'
+  if a.target=='arm64':binary=binary/'aarch64-unknown-linux-gnu'
+  binary=binary/'release/deniald'
+  artifact=WORK/'artifacts'/a.target/sha(PATCH)[:16];artifact.mkdir(parents=True,exist_ok=True);shutil.copy2(binary,artifact/'deniald')
+  metadata=dict(revision=LOCK['revision'],patch_sha256=sha(PATCH),builder_sha256=sha(__file__),binary=str((artifact/'deniald').relative_to(WORK)),binary_sha256=sha(artifact/'deniald'),rustc=subprocess.check_output(['rustc','--version'],text=True).strip())
+  (WORK/(a.target+'.json')).write_text(json.dumps(metadata,indent=2)+'\n');print('Verified native broker:',verified_binary(a.target))
+if __name__=='__main__':main()

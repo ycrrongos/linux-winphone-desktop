@@ -240,13 +240,14 @@ def package():
         path = bundle / "lib" / name
         if base.digest(path) != checksum or path.read_bytes()[18:20] != b"\xb7\x00":
             raise RuntimeError("Changed or non-ARM64 bundle: " + name)
+    native_binary = base.native_keyboard_binary("arm64")
     destination = ROOT / "packaging/out/denial-arm64"
     if destination.exists():
         shutil.rmtree(destination)
     runtime = destination / "lib/win10x-denial/runtime/usr"
     (runtime / "bin").mkdir(parents=True)
     for name in ("deniald", "denialctl", "denial-portal", "denial-polkit-agent", "denial-settings"):
-        shutil.copy2(RUNTIME / "usr/bin" / name, runtime / "bin" / name)
+        shutil.copy2(native_binary if name == "deniald" else RUNTIME / "usr/bin" / name, runtime / "bin" / name)
     for name in ("settings", "polkit"):
         shutil.copytree(RUNTIME / "usr/lib/denial" / name, runtime / "lib/denial" / name)
     for name in ("denial", "denial-flutter-engine"):
@@ -262,6 +263,8 @@ def package():
     (destination / "libexec").mkdir(exist_ok=True)
     shutil.copy2(ROOT / "packaging/win10x-screen-hooks", destination / "libexec/win10x-screen-hooks")
     shutil.copy2(ROOT / "packaging/win10x-denial.desktop", destination / "share/wayland-sessions/win10x-denial.desktop")
+    shutil.copytree(ROOT / "denial/native", destination / "lib/win10x-denial/native-sources")
+    shutil.copy2(ROOT / "target/denial-native/arm64.json", destination / "lib/win10x-denial/native-build.json")
     base.stage_auth(destination, "arm64")
     print("Staged ARM64 session:", destination)
 

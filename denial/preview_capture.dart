@@ -23,6 +23,8 @@ import 'package:denial_desktop/src/state/system_level_hud.dart';
 import 'package:denial_desktop/src/widgets/system_level_hud.dart';
 import 'package:denial_desktop/src/widgets/osk/pinyin_keyboard.dart';
 import 'package:denial_desktop/src/widgets/osk/shell_osk_panel.dart';
+import 'package:denial_desktop/src/widgets/osk/keyboard_tools.dart';
+import 'package:denial_desktop/src/widgets/osk/keyboard_tools_panel.dart';
 import 'package:denial_flutter_sdk/platform.dart';
 import 'package:denial_desktop/src/desktop/retained_animated_positioned.dart';
 
@@ -305,9 +307,15 @@ class _PreviewCaptureState extends ConsumerState<PreviewCapture> {
     if (scenario == 'ime-chinese' ||
         scenario == 'ime-secret' ||
         scenario == 'ime-candidates' ||
-        scenario == 'ime-expanded') {
+        scenario == 'ime-expanded' ||
+        scenario.startsWith('keyboard-tools-')) {
       final input = StreamController<DenialTextInputState>.broadcast();
       final output = ValueNotifier<String>('');
+      final shortcuts = <PcKeyStroke>[];
+      final keyboardTargetFocus = FocusNode(
+        debugLabel: 'Keyboard QA editor target',
+      );
+      final arrowKeys = <String>[];
       ref
           .read(shellPopupControllerProvider.notifier)
           .show(
@@ -319,13 +327,17 @@ class _PreviewCaptureState extends ConsumerState<PreviewCapture> {
                 child: Column(
                   children: [
                     const SizedBox(height: 50),
-                    ValueListenableBuilder<String>(
-                      valueListenable: output,
-                      builder: (context, text, _) => Text(
-                        '输入结果：$text',
-                        style: const TextStyle(
-                          color: Color(0xffffffff),
-                          fontSize: 28,
+                    Focus(
+                      autofocus: scenario == 'keyboard-tools-focus',
+                      focusNode: keyboardTargetFocus,
+                      child: ValueListenableBuilder<String>(
+                        valueListenable: output,
+                        builder: (context, text, _) => Text(
+                          '输入结果：$text',
+                          style: const TextStyle(
+                            color: Color(0xffffffff),
+                            fontSize: 28,
+                          ),
                         ),
                       ),
                     ),
@@ -336,7 +348,10 @@ class _PreviewCaptureState extends ConsumerState<PreviewCapture> {
                           .toDouble(),
                       child: Win10xPinyinKeyboard(
                         textInputStates: input.stream,
+                        onShortcut: shortcuts.add,
                         onKey: (intent) {
+                          if (intent.action == ShellOskKeyAction.key)
+                            arrowKeys.add(intent.key ?? '');
                           if (intent.action == ShellOskKeyAction.text)
                             output.value += intent.text ?? '';
                         },
@@ -376,12 +391,139 @@ class _PreviewCaptureState extends ConsumerState<PreviewCapture> {
       }
       if (toggle == null) throw StateError('Pinyin dictionary did not load');
       if (((toggle.widget as TextButton).child as Text).data == '英') {
+        // The stream/dictionary can enable this widget before its new layout
+        // is painted. Do not inject a setup tap into the preceding frame.
+        await _paintFrame();
         final b = toggle.findRenderObject()! as RenderBox;
         await _tapAt(b.localToGlobal(b.size.center(Offset.zero)));
       }
       // AnimatedSwitcher keeps the outgoing English keys alive (and ignores
       // their pointers). Wait for it before locating the actual current keys.
       await Future<void>.delayed(const Duration(milliseconds: 300));
+      final modeReady = _findElement(
+        (e) =>
+            e.widget is TextButton &&
+            (e.widget as TextButton).child is Text &&
+            ((e.widget as TextButton).child as Text).data == '中',
+      );
+      if (modeReady == null)
+        throw StateError(
+          'Chinese mode setup tap did not activate its rendered button',
+        );
+      if (scenario.startsWith('keyboard-tools-')) {
+        Future<void> tapButton(String label) async {
+          final element = _findElement(
+            (e) =>
+                e.widget is TextButton &&
+                (e.widget as TextButton).child is Text &&
+                ((e.widget as TextButton).child as Text).data == label,
+          );
+          if (element == null) throw StateError('Missing toolbar $label');
+          await Scrollable.ensureVisible(element);
+          await _paintFrame();
+          final box = element.findRenderObject()! as RenderBox;
+          await _tapAt(box.localToGlobal(box.size.center(Offset.zero)));
+          await Future<void>.delayed(const Duration(milliseconds: 350));
+        }
+
+        Future<void> tapSemantic(String label) async {
+          final element = _findElement(
+            (e) =>
+                e.widget is Semantics &&
+                (e.widget as Semantics).properties.label == label,
+          );
+          if (element == null) throw StateError('Missing key $label');
+          await Scrollable.ensureVisible(element);
+          await _paintFrame();
+          final box = element.findRenderObject()! as RenderBox;
+          final point = box.localToGlobal(box.size.center(Offset.zero));
+          final hits = HitTestResult();
+          GestureBinding.instance.hitTestInView(
+            hits,
+            point,
+            View.of(element).viewId,
+          );
+          if (label == '电脑键 数字区')
+            debugPrint(
+              'Win10X QA numpad tap=$point size=${box.size} hit=${hits.path.any((entry) => identical(entry.target, box))}',
+            );
+          await _tapAt(point);
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+
+        if (scenario == 'keyboard-tools-focus') {
+          await tapButton('编辑');
+          await tapButton('撤销');
+          if (!keyboardTargetFocus.hasFocus)
+            throw StateError('Keyboard controls stole editor focus');
+        } else if (scenario == 'keyboard-tools-editing') {
+          await tapButton('编辑');
+          await tapSemantic('选择');
+          await tapSemantic('光标 ←');
+          if (shortcuts.last.key != 'Left' ||
+              !shortcuts.last.modifiers.contains('Shift_L'))
+            throw StateError('Selection did not send Shift+Left');
+          await tapButton('复制');
+          await tapButton('粘贴');
+          await tapButton('撤销');
+          await tapButton('重做');
+          if (shortcuts.map((s) => s.key).join(',') != 'Left,c,v,z,z' ||
+              shortcuts
+                  .skip(1)
+                  .take(3)
+                  .any(
+                    (s) =>
+                        s.modifiers.length != 1 ||
+                        s.modifiers.first != 'Control_L',
+                  ))
+            throw StateError('Editing shortcut mapping wrong');
+          if (!shortcuts.last.modifiers.contains('Shift_L'))
+            throw StateError('Redo lacks Linux Ctrl+Shift+Z');
+        } else if (scenario == 'keyboard-tools-space') {
+          final element = _findElement(
+            (e) =>
+                e.widget is Semantics &&
+                const {
+                  'Space',
+                  '空格',
+                }.contains((e.widget as Semantics).properties.label),
+          );
+          if (element == null) throw StateError('Space semantic missing');
+          final box = element.findRenderObject()! as RenderBox;
+          final start = box.localToGlobal(box.size.center(Offset.zero));
+          await _dragBetween(start, start + const Offset(64, 0));
+          if (arrowKeys.where((k) => k == 'Right').length < 3 ||
+              output.value.contains(' '))
+            throw StateError(
+              'Space drag arrows=$arrowKeys output=${output.value}',
+            );
+        } else {
+          await tapButton('电脑');
+          await tapSemantic('电脑键 F12');
+          if (shortcuts.last.key != 'F12') throw StateError('F12 missing');
+          await tapSemantic('电脑键 Fn');
+          await tapSemantic('电脑键 1');
+          if (shortcuts.last.key != 'F1')
+            throw StateError('Fn number layer failed');
+          await tapSemantic('电脑键 Ctrl');
+          await tapSemantic('电脑键 z');
+          if (shortcuts.last.key != 'z' ||
+              !shortcuts.last.modifiers.contains('Control_L'))
+            throw StateError('PC Ctrl chord missing');
+          if (scenario == 'keyboard-tools-numpad') {
+            await tapButton('数字区');
+            final pane = _findElement((e) => e.widget is KeyboardToolsPanel);
+            debugPrint(
+              'Win10X QA numpad view=${(pane?.widget as KeyboardToolsPanel?)?.tools.view}',
+            );
+            await tapSemantic('电脑键 7');
+            if (shortcuts.last.key != 'KP_7')
+              throw StateError('Numpad mapping ${shortcuts.last.key}');
+          }
+        }
+        debugPrint('Win10X QA: $scenario actual toolbar/keys passed');
+        return;
+      }
       if (scenario == 'ime-secret') {
         input.add(
           const DenialTextInputState(
@@ -422,7 +564,9 @@ class _PreviewCaptureState extends ConsumerState<PreviewCapture> {
           throw StateError('Unselected pinyin leaked to editor');
         _semanticBox('候选 你好');
         if (scenario == 'ime-candidates') {
-          debugPrint('Win10X QA: nihao candidates present, no premature commit');
+          debugPrint(
+            'Win10X QA: nihao candidates present, no premature commit',
+          );
           return;
         }
         if (scenario == 'ime-expanded') {

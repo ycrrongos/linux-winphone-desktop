@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Download locked Debian development libraries into a project-local ARM64 sysroot.
+No packages are installed on the host or phone. Optional std bootstrap handles
+vendor Rust builds whose metadata is incompatible with official rust-std.
+"""
+import argparse,concurrent.futures,hashlib,json,os,shutil,subprocess,tempfile,urllib.request,shlex
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1];WORK=ROOT/'target/denial-native'
+def run(*args,**kwargs):subprocess.run([str(a) for a in args],check=True,**kwargs)
+def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+def fetch(url,path,checksum):
+ if not path.exists() or digest(path)!=checksum:
+  temp=path.with_suffix(path.suffix+'.part')
+  with urllib.request.urlopen(url,timeout=90) as response,temp.open('wb') as out:shutil.copyfileobj(response,out)
+  if digest(temp)!=checksum:temp.unlink();raise RuntimeError('Dependency checksum mismatch')
+  temp.replace(path)
+ return path
+
+def main():
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--check',action='store_true');parser.add_argument('--bootstrap-std',action='store_true');a=parser.parse_args()
+ lock=json.loads((ROOT/'denial/native/arm64-sysroot.lock.json').read_text());cache=WORK/'debs';cache.mkdir(parents=True,exist_ok=True);sysroot=WORK/'sysroot';sysroot.mkdir(exist_ok=True)
+ def download(item):
+  path=cache/Path(item['file']).name
+  if a.check:
+   if not path.exists() or digest(path)!=item['sha256']:raise RuntimeError('Missing/changed sysroot package '+item['name'])
+   return path
+  return fetch(lock['repository']+'/'+item['file'],path,item['sha256'])
+ with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:files=list(pool.map(download,lock['packages']))
+ if not a.check:
+  for path in files:
+   with tempfile.TemporaryDirectory(dir=WORK) as temp:
+    run('bsdtar','-xf',path,'-C',temp,'--include=data.tar.*');data=next(Path(temp).glob('data.tar.*'));run('bsdtar','-xf',data,'-C',sysroot)
+  for name in ['lib','lib64']:
+   path=sysroot/name
+   if not path.exists() and not path.is_symlink():path.symlink_to('usr/'+name)
+ print('Verified ARM64 sysroot packages:',len(files),sysroot)
+ if not a.bootstrap_std:return
+ spec=lock['rust_std_bootstrap'];version=subprocess.check_output(['rustc','--version'],text=True)
+ if not version.startswith('rustc '+spec['version']+' '):raise RuntimeError('Fallback Rust source is pinned to '+spec['version']+'; use a matching toolchain or update the source lock')
+ archive=fetch(spec['mirror_url'],WORK/'rust-src.tar.xz',spec['sha256']);run('tar','-xJf',archive,'-C',WORK)
+ view=WORK/'rust-sysroot';lib=view/'lib/rustlib';lib.mkdir(parents=True,exist_ok=True)
+ host=Path(subprocess.check_output(['rustc','--print','sysroot'],text=True).strip())/'lib/rustlib'
+ for path in host.iterdir():
+  if path.name not in ('src','aarch64-unknown-linux-gnu') and not (lib/path.name).exists():(lib/path.name).symlink_to(path)
+ source=WORK/('rust-src-'+spec['version'])/'rust-src/lib/rustlib/src'
+ if not (lib/'src').exists():(lib/'src').symlink_to(source)
+ wrapper=WORK/'rustc-build-std';wrapper.write_text('#!/bin/sh\nexec '+shlex.quote(shutil.which('rustc'))+' --sysroot '+shlex.quote(str(view))+' "$@"\n');wrapper.chmod(0o755)
+ # Build std without third-party feature probes, then expose these matching
+ # libraries to probes like io-lifetimes before compiling the compositor.
+ probe=WORK/'std-probe';(probe/'src').mkdir(parents=True,exist_ok=True)
+ (probe/'Cargo.toml').write_text('[package]\nname="win10x-std-probe"\nversion="0.0.0"\nedition="2024"\n[workspace]\n')
+ (probe/'src/lib.rs').write_text('pub fn ready() {}\n')
+ target=WORK/'std-bootstrap';env=dict(os.environ,RUSTC=str(wrapper),RUSTC_BOOTSTRAP='1',CARGO_TARGET_DIR=str(target),CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER='aarch64-linux-gnu-gcc')
+ run('cargo','build','--manifest-path',probe/'Cargo.toml','--release','--target','aarch64-unknown-linux-gnu','-Zbuild-std=std,panic_abort',env=env)
+ dest=lib/'aarch64-unknown-linux-gnu/lib';dest.mkdir(parents=True,exist_ok=True)
+ # Only this helper's project-local Rust target is replaced, never host std.
+ for old in dest.iterdir():
+  if old.suffix in ('.rlib','.rmeta'):old.unlink()
+ for path in (target/'aarch64-unknown-linux-gnu/release/deps').iterdir():
+  if path.suffix in ('.rlib','.rmeta'):shutil.copy2(path,dest/path.name)
+ print('Build native ARM64 with:')
+ print('RUSTC='+str(wrapper)+' RUSTC_BOOTSTRAP=1 WIN10X_BUILD_STD=1 tools/win10x-denial-native build --target arm64 --sysroot '+str(sysroot))
+if __name__=='__main__':main()

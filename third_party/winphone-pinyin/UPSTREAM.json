@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/ycrrongos/linux-pinyin-keybord-wp.git",
-  "revision": "6114670dc44c2c4832cbe836b6ebb22f4d408aac",
+  "revision": "93009f23b76ceb4a3dea1c739102e952ded8051a",
   "license": "GPL-3.0-only; dictionary Apache-2.0",
   "files": [
     {
@@ -18,8 +18,8 @@
     {
       "source": "integration/denial/pinyin_keyboard.dart",
       "destination": "denial/keyboard/pinyin_keyboard.dart",
-      "source_sha256": "739e1f237839993b1d17f6d11888c000bd952e688084f24301f950f40f08a49e",
-      "integrated_sha256": "7deda4430354089261b7355db27e28b9a16976665f012a9f526b1ff354a2b2f2"
+      "source_sha256": "c97c2660a4410539293a9374257c4acf0b6367ad16d6553957f4d4dfa5dc3e7f",
+      "integrated_sha256": "c6b9da7503261f1d3bcf70742af81720620d794545917335079079b527d393d7"
     },
     {
       "source": "integration/denial/wp_motion.dart",

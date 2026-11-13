@@ -87,3 +87,15 @@ Rust 参考实现；新模式真实会话验收仍需逐项完成：
 6. Settings 应用
 7. 可刷机 / 可安装镜像（手机 boot 另立硬件适配）
 8. 双屏 / 铰链仍排除（见 `research/windows10x/dual-screen-hardware/`）
+
+### Denial keyboard tools — 2026-11-13
+
+- [x] Implementation/local checks: Fcitx-inspired Edit entry, space swipe,
+  directional/word selection and application shortcut commands, WP styling.
+- [x] Implementation: full PC/Fn/navigation/modifier/keypad layout; original
+  Chinese composition still available for unmodified PC letters.
+- [x] Native source map extended and built for x64/ARM64; package source/hash
+  guard prevents use of an unpatched compositor. No native lock-policy change.
+- [ ] Real-seat acceptance of new editing shortcuts in GTK/Qt/Chromium and
+  terminal applications; keyboard navigation/shortcuts depend on app support.
+  Earlier GTK你好 acceptance predates these editing extensions.

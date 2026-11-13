@@ -9,6 +9,8 @@ import 'package:denial_flutter_sdk/platform.dart';
 import 'shell_osk_panel.dart';
 import 'pinyin_engine.dart';
 import 'pinyin_session.dart';
+import 'keyboard_tools.dart';
+import 'keyboard_tools_panel.dart';
 import '../../state/win10x_wp_motion.dart';
 
 class Win10xPinyinKeyboard extends StatefulWidget {
@@ -16,12 +18,14 @@ class Win10xPinyinKeyboard extends StatefulWidget {
     super.key,
     this.onKey,
     this.onKeyDown,
+    this.onShortcut,
     this.textInputStates,
     this.predictions,
     this.onPredict,
   });
   final ValueChanged<ShellOskKeyIntent>? onKey;
   final VoidCallback? onKeyDown;
+  final ValueChanged<PcKeyStroke>? onShortcut;
   final Stream<DenialTextInputState>? textInputStates;
   final Stream<DenialTextPrediction>? predictions;
   final ValueChanged<ShellOskWordRequest>? onPredict;
@@ -31,6 +35,7 @@ class Win10xPinyinKeyboard extends StatefulWidget {
 
 class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
   final session = PinyinSession();
+  final tools = KeyboardTools();
   StreamSubscription<DenialTextInputState>? input;
   DenialTextInputState? editor;
   String raw = '';
@@ -38,6 +43,7 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
   bool expanded = false, loaded = false;
   Timer? debounce;
   int revision = 0;
+  int toolEpoch = 0;
   bool get sensitive =>
       editor != null &&
       ((editor!.contentHint & 0xc0) != 0 ||
@@ -45,7 +51,12 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
   bool get directOnly =>
       sensitive || {2, 3, 4, 5, 6}.contains(editor?.contentPurpose);
   bool get composing =>
-      session.chinese && !directOnly && loaded && (editor?.active ?? false);
+      session.chinese &&
+      (tools.view == KeyboardView.typing ||
+          tools.view == KeyboardView.computer) &&
+      !directOnly &&
+      loaded &&
+      (editor?.active ?? false);
   @override
   void initState() {
     super.initState();
@@ -97,6 +108,8 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
 
   void reset() {
     debounce?.cancel();
+    toolEpoch++;
+    tools.reset();
     revision++;
     raw = '';
     choices = [];
@@ -140,7 +153,7 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
   }
 
   Future<void> _actions = Future.value();
-  void key(ShellOskKeyIntent intent) {
+  void ownedAction(Future<void> Function() action) {
     final owner = (
       editor?.activationSerial,
       editor?.active,
@@ -155,10 +168,60 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
                 editor?.active,
                 editor?.contentPurpose,
                 editor?.contentHint,
-              )) {
-        await processKey(intent);
-      }
+              ))
+        await action();
     });
+  }
+
+  void key(ShellOskKeyIntent intent) => ownedAction(() => processKey(intent));
+  Future<bool> flushComposition() async {
+    while (raw.isNotEmpty) {
+      final before = raw;
+      if (!await commitDefault()) return false;
+      if (raw == before) return false;
+    }
+    return mounted;
+  }
+
+  void changeView(KeyboardView view) => ownedAction(() async {
+    if (!await flushComposition()) return;
+    setState(() {
+      reset();
+      tools.view = view;
+    });
+  });
+  void shortcut(PcKeyStroke stroke) {
+    widget.onKeyDown?.call();
+    if (composing && stroke.modifiers.isEmpty) {
+      if (RegExp(r"^[a-z']$").hasMatch(stroke.key)) {
+        key(ShellOskKeyIntent.text(stroke.key));
+        return;
+      }
+      if (stroke.key == 'space') {
+        key(const ShellOskKeyIntent.space());
+        return;
+      }
+      if (stroke.key == 'BackSpace' && raw.isNotEmpty) {
+        key(const ShellOskKeyIntent.backspace());
+        return;
+      }
+    }
+    ownedAction(() async {
+      if (!await flushComposition()) return;
+      if (widget.onShortcut case final send?) {
+        send(stroke);
+      } else if (stroke.modifiers.every((key) => key == 'Control_L')) {
+        widget.onKey?.call(
+          ShellOskKeyIntent.key(stroke.key, ctrl: stroke.modifiers.isNotEmpty),
+        );
+      }
+      if (mounted) setState(() {});
+    });
+  }
+
+  void command(String name) {
+    if (sensitive && const {'复制', '剪切', '全选'}.contains(name)) return;
+    shortcut(tools.command(name));
   }
 
   Future<bool> commitDefault() async {
@@ -179,7 +242,7 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
 
   Future<void> processKey(ShellOskKeyIntent intent) async {
     if (!composing || intent.ctrl) {
-      if (raw.isNotEmpty) reset();
+      if (raw.isNotEmpty && !await flushComposition()) return;
       widget.onKey?.call(intent);
       return;
     }
@@ -230,9 +293,8 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
           widget.onKey?.call(intent);
         }
       case ShellOskKeyAction.key:
-        // Cursor movement cannot carry an old editor's composition forward.
-        reset();
-        setState(() {});
+        // Finish pending pinyin before leaving its preedit, without dropping it.
+        if (raw.isNotEmpty && !await flushComposition()) return;
         widget.onKey?.call(intent);
       case ShellOskKeyAction.replace:
         widget.onKey?.call(intent);
@@ -249,11 +311,14 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
 
   @override
   Widget build(BuildContext context) {
+    final epoch = toolEpoch;
     Widget button(String label, VoidCallback? tap) => TextButton(
       onPressed: tap,
       style: TextButton.styleFrom(
         foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        minimumSize: const Size(40, 32),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         shape: const RoundedRectangleBorder(),
       ),
       child: Text(label),
@@ -272,7 +337,9 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
                   loaded && !directOnly
                       ? () {
                           setState(() {
+                            final view = tools.view;
                             reset();
+                            tools.view = view;
                             session.chinese = !session.chinese;
                             session.save();
                           });
@@ -322,52 +389,125 @@ class _Win10xPinyinKeyboardState extends State<Win10xPinyinKeyboard> {
         ],
       ),
     );
-    return Column(
-      children: [
-        header,
-        Expanded(
-          child: AnimatedSwitcher(
-            duration: WpMotion.barExit,
-            switchInCurve: WpMotion.enter,
-            switchOutCurve: WpMotion.exit,
-            transitionBuilder: (child, animation) => FadeTransition(
-              opacity: animation,
-              child: IgnorePointer(
-                ignoring: animation.status == AnimationStatus.reverse,
-                child: child,
-              ),
-            ),
-            child: expanded && composing
-                ? ColoredBox(
-                    color: const Color(0xff171717),
-                    child: SingleChildScrollView(
-                      child: Wrap(
-                        children: [
-                          for (final choice in choices)
-                            Semantics(
-                              label: '候选 ${choice.text}',
-                              button: true,
-                              child: button(choice.text, () => pick(choice)),
-                            ),
-                        ],
-                      ),
-                    ),
-                  )
-                : ShellOskPanel(
-                    key: ValueKey(
-                      'pinyin:$composing:${editor?.activationSerial}',
-                    ),
-                    onKey: key,
-                    onKeyDown: widget.onKeyDown,
-                    textInputStates: widget.textInputStates,
-                    predictions: composing || sensitive
-                        ? null
-                        : widget.predictions,
-                    onPredict: composing ? null : widget.onPredict,
+    return ExcludeFocus(
+      child: Column(
+        children: [
+          header,
+          SizedBox(
+            height: 34,
+            child: Row(
+              children: [
+                button(
+                  tools.view == KeyboardView.editing ? '键盘' : '编辑',
+                  () => changeView(
+                    tools.view == KeyboardView.editing
+                        ? KeyboardView.typing
+                        : KeyboardView.editing,
                   ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final name in ['撤销', '重做', '剪切', '复制', '粘贴', '全选'])
+                          button(
+                            name,
+                            sensitive && const {'剪切', '复制', '全选'}.contains(name)
+                                ? null
+                                : () => command(name),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (tools.view == KeyboardView.computer ||
+                    tools.view == KeyboardView.numpad)
+                  button(
+                    tools.view == KeyboardView.numpad ? '主键区' : '数字区',
+                    () => changeView(
+                      tools.view == KeyboardView.numpad
+                          ? KeyboardView.computer
+                          : KeyboardView.numpad,
+                    ),
+                  ),
+                if (widget.onShortcut != null && !sensitive)
+                  button(
+                    tools.view == KeyboardView.computer ||
+                            tools.view == KeyboardView.numpad
+                        ? '手机'
+                        : '电脑',
+                    () => changeView(
+                      tools.view == KeyboardView.computer ||
+                              tools.view == KeyboardView.numpad
+                          ? KeyboardView.typing
+                          : KeyboardView.computer,
+                    ),
+                  ),
+              ],
+            ),
           ),
-        ),
-      ],
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: WpMotion.barExit,
+              switchInCurve: WpMotion.enter,
+              switchOutCurve: WpMotion.exit,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: IgnorePointer(
+                  ignoring: animation.status == AnimationStatus.reverse,
+                  child: child,
+                ),
+              ),
+              child: tools.view != KeyboardView.typing
+                  ? KeyboardToolsPanel(
+                      key: ValueKey(
+                        'tools:${tools.view}:${editor?.activationSerial}:$toolEpoch',
+                      ),
+                      tools: tools,
+                      onStroke: (stroke) {
+                        if (epoch == toolEpoch) shortcut(stroke);
+                      },
+                      onChange: () {
+                        if (epoch == toolEpoch) setState(() {});
+                      },
+                      onCommand: (name) {
+                        if (epoch == toolEpoch) command(name);
+                      },
+                      sensitive: sensitive,
+                    )
+                  : expanded && composing
+                  ? ColoredBox(
+                      color: const Color(0xff171717),
+                      child: SingleChildScrollView(
+                        child: Wrap(
+                          children: [
+                            for (final choice in choices)
+                              Semantics(
+                                label: '候选 ${choice.text}',
+                                button: true,
+                                child: button(choice.text, () => pick(choice)),
+                              ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : ShellOskPanel(
+                      key: ValueKey(
+                        'pinyin:$composing:${editor?.activationSerial}',
+                      ),
+                      onKey: key,
+                      onKeyDown: widget.onKeyDown,
+                      textInputStates: widget.textInputStates,
+                      predictions: composing || sensitive
+                          ? null
+                          : widget.predictions,
+                      onPredict: composing ? null : widget.onPredict,
+                    ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

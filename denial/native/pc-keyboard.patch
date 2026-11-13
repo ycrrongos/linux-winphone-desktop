@@ -1,0 +1,80 @@
+diff --git a/compositor/src/bin/deniald/wayland_frontend/input.rs b/compositor/src/bin/deniald/wayland_frontend/input.rs
+index 6f64af7..ed20473 100644
+--- a/compositor/src/bin/deniald/wayland_frontend/input.rs
++++ b/compositor/src/bin/deniald/wayland_frontend/input.rs
+@@ -309,6 +309,54 @@ fn shell_text_key_stroke(character: char) -> Option<ShellKeyStroke> {
+ fn shell_named_key_stroke(key: &str) -> Option<ShellKeyStroke> {
+     let (evdev_keycode, shift) = match key {
+         "Escape" => (1, false),
++        "grave" => (41, false),
++        "Shift_L" => (42, false),
++        "Shift_R" => (54, false),
++        "Control_L" => (29, false),
++        "Control_R" => (97, false),
++        "Alt_L" => (56, false),
++        "Alt_R" => (100, false),
++        "Super_L" => (125, false),
++        "Super_R" => (126, false),
++        "Caps_Lock" => (58, false),
++        "Home" => (102, false),
++        "End" => (107, false),
++        "Page_Up" => (104, false),
++        "Page_Down" => (109, false),
++        "Insert" => (110, false),
++        "Print" => (99, false),
++        "Scroll_Lock" => (70, false),
++        "Pause" => (119, false),
++        "Num_Lock" => (69, false),
++        "KP_Divide" => (98, false),
++        "KP_Multiply" => (55, false),
++        "KP_Subtract" => (74, false),
++        "KP_Add" => (78, false),
++        "KP_Enter" => (96, false),
++        "KP_Decimal" => (83, false),
++        "F1" => (59, false),
++        "F2" => (60, false),
++        "F3" => (61, false),
++        "F4" => (62, false),
++        "F5" => (63, false),
++        "F6" => (64, false),
++        "F7" => (65, false),
++        "F8" => (66, false),
++        "F9" => (67, false),
++        "F10" => (68, false),
++        "F11" => (87, false),
++        "F12" => (88, false),
++        "KP_0" => (82, false),
++        "KP_1" => (79, false),
++        "KP_2" => (80, false),
++        "KP_3" => (81, false),
++        "KP_4" => (75, false),
++        "KP_5" => (76, false),
++        "KP_6" => (77, false),
++        "KP_7" => (71, false),
++        "KP_8" => (72, false),
++        "KP_9" => (73, false),
++
+         "BackSpace" | "Backspace" => (14, false),
+         "Tab" => (15, false),
+         "Return" | "Enter" => (28, false),
+@@ -3141,3 +3189,20 @@ fn process_flutter_keyboard_transition(
+     synchronize_active_keyboard_layout(state, &keyboard);
+     true
+ }
++
++#[cfg(all(test, feature = "flutter"))]
++mod win10x_pc_keyboard_tests {
++    use super::shell_named_key_stroke;
++    #[test]
++    fn pc_navigation_function_and_modifier_keys_use_evdev_codes() {
++        for (name, code) in [("Home", 102), ("End", 107), ("F1", 59),
++            ("F10", 68), ("F11", 87), ("F12", 88), ("Shift_L", 42),
++            ("Control_L", 29), ("Alt_L", 56), ("Super_L", 125),
++            ("Page_Up", 104), ("Page_Down", 109), ("KP_Enter", 96)] {
++            let stroke = shell_named_key_stroke(name).expect("supported PC key");
++            assert_eq!(stroke.evdev_keycode, code);
++            assert!(!stroke.shift, "explicit modifier ownership requires unshifted strokes");
++        }
++        assert!(shell_named_key_stroke("Fn").is_none());
++    }
++}

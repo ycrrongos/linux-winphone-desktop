@@ -1300,3 +1300,85 @@ Append-only log for blockers and fixes. Required by [`AGENTS.md`](../AGENTS.md).
   to a private QA file. The rerun confirms secure key delivery and toast cancel
   assertions; collect that log alongside actual screen captures.
 - **Tried but failed:** Treating absence of journal errors as completed assertions.
+
+### 2026-11-13 — initial-import whitespace checks include untouched upstream CRLF
+
+- **Problem:** git diff --cached --check on a fresh desktop root commit emitted
+  enormous trailing-whitespace diagnostics for untouched vendored source.
+- **Cause:** Every imported line is new to that repository; upstream CRLF files
+  and pre-existing Markdown hard line breaks are all inspected. This is not a
+  focused check of task-authored changes.
+- **Resolution:** Preserve upstream bytes/notices, use focused checks for new
+  publication files, and verify exported source integrity/builds independently.
+- **Tried but failed:** Running an unrestricted initial-import whitespace check
+  interactively; it produced noisy output unrelated to the split's behavior.
+  This check was not claimed as passing and no wholesale upstream rewrite was
+  made merely to silence it.
+
+### 2026-11-13 — Git backend may lag repository rename/public metadata
+
+- **Problem:** First push immediately after keyboard rename/private→public
+  returned403: repository disabled, owner should check account.
+- **Cause:** API immediately reported disabledfalse/public/admin permissions;
+  later anonymous ls-remote succeeded. Best hypothesis is transient Git backend
+  propagation; no account suspension or policy restriction was established.
+- **Resolution:** Preserve completed metadata state, inspect authenticated and
+  anonymous API, prove anonymous Git readiness, and resume idempotently. Both
+  renamed public repositories then pushed and verified successfully.
+- **Tried but failed:** Treating successful metadata PATCH as immediate Git
+  readiness. Do not recreate repositories or conclude account suspension from
+  this message alone; preserve IDs/history and check the actual backend state.
+
+### 2026-11-13 — full keyboard requires native key mappings and compatible Rust std
+
+- **Problem:** Denial's SDK can press/release keys, but the pinned native named
+  key table rejects modifiers, Home/End and function keys. Official ARM64 std
+  then failed E0514 under distro Rust despite identical version/commit strings.
+- **Cause:** Native whitelist incomplete; distro compiler metadata includes a
+  vendor-specific compatibility identity. A subsequent build-std run lacked
+  visible target std for io-lifetimes feature probes, selecting its fallback
+  AsFd trait and failing Smithay compilation.
+- **Resolution:** Extend only the named mapping table using the existing native
+  ownership protocol. Build matching std from source and expose it to feature
+  probes before third-party dependencies. ARM64 native build and QEMU --help pass.
+  Preserve exact source/patch/compiler/binary and sysroot package provenance.
+- **Tried but failed:** Showing unsupported UI buttons alone; using official std
+  with the distro compiler; rebuilding std without making it visible to build
+  probes. No system toolchain, phone driver, or native lock policy was changed.
+
+### 2026-11-13 — drag consumption must not disable subsequent space moves
+
+- **Problem:** Space swipe emitted only one Right even across64 logical pixels.
+- **Cause:** Marking touch.done suppresses release's Space, but the original
+  _touchMove early return also ignored every later move of that same touch.
+- **Resolution:** Keep done for consumed release, allow moves while the shared
+  cursor tracker is active, and claim the recognizer after its12px threshold.
+- **Tried but failed:** Adding gesture claim alone; the retained touch had
+  already been marked done. Actual multi-move UI fixture exposed it, while the
+  isolated distance accumulator unit test alone could not cover integration.
+
+### 2026-11-13 — visible editing controls must not steal the input target focus
+
+- **Problem:** New toolbar TextButtons can request focus from a shell TextField,
+  making subsequent OSK shortcuts target the toolbar rather than the editor.
+- **Cause:** Ordinary Flutter buttons participate in focus traversal; a software
+  keyboard must preserve the active editor while receiving touch/semantics input.
+- **Resolution:** Exclude keyboard descendants from focus acquisition, retain
+  pointer/semantics activation, and test an external framework focus target
+  across Edit/Undo taps. Native modifier chords still use the existing broker.
+- **Tried but failed:** Treating an onShortcut callback spy as proof of focus
+  preservation. A dedicated focus fixture is required in addition to mapping.
+
+### 2026-11-13 — keep keypad entry visible on narrow computer layouts
+
+- **Problem:** The narrow-PC test did not activate a keypad button at the far
+  right of a horizontally scrolled main board; its next tap sent F7 instead.
+- **Cause:** Confirmed intended mode was still computer; exact offscreen tap
+  failure was not isolated. Waiting for transitions/removing animated ensure-
+  visible did not resolve that test setup. Do not label those attempts fixes.
+- **Resolution:** Use a fixed toolbar keypad/main-board entry, remove the
+  redundant far-edge button, and test this real user-visible route. Keypad
+  activation and KP_7 then pass. Main keyboard remains freely scrollable.
+- **Tried but failed:** Timing-only changes and assuming a semantic lookup means
+  a scrolled control is tappable. Render proxy hit-path identity alone also
+  cannot establish clipping, so that diagnostic was not treated as proof.
